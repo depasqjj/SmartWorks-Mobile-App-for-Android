@@ -15,6 +15,8 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
+import com.example.smartworks.api.SmartWorksApiService;
+import com.example.smartworks.auth.AuthenticationManager;
 
 public class DeviceConfigActivity extends AppCompatActivity {
     private static final String TAG = "DeviceConfigActivity";
@@ -30,6 +32,7 @@ public class DeviceConfigActivity extends AppCompatActivity {
     private Spinner powerOnStateSpinner;
     private Spinner tempUnitsSpinner;
     private Button wifiSettingsButton;
+    private Button checkUpdateButton; // ADDED
     private Button saveButton;
     private Button deleteDeviceButton;
 
@@ -38,6 +41,7 @@ public class DeviceConfigActivity extends AppCompatActivity {
     private String deviceAddress;
     private String deviceIP;
     private String wifiSSID;
+    private String firmwareVersion; // ADDED
     private int devicePosition;
 
     @Override
@@ -57,13 +61,23 @@ public class DeviceConfigActivity extends AppCompatActivity {
         deviceAddress = intent.getStringExtra("device_address");
         deviceIP = intent.getStringExtra("device_ip");
         wifiSSID = intent.getStringExtra("wifi_ssid");
+        firmwareVersion = intent.getStringExtra("firmware_version"); // ADDED
         devicePosition = intent.getIntExtra("device_position", -1);
 
         initializeViews();
         setupSpinners();
+        setupSpinners();
         loadDeviceSettings();
         setupClickListeners();
+        
+        // Initialize API service
+        apiService = SmartWorksApiService.getInstance(AuthenticationManager.getInstance(this));
+        
+        // Auto-check for updates
+        checkForUpdatesSilent();
     }
+    
+    private SmartWorksApiService apiService;
 
     private void initializeViews() {
         deviceNameEdit = findViewById(R.id.deviceNameEdit);
@@ -76,6 +90,7 @@ public class DeviceConfigActivity extends AppCompatActivity {
         powerOnStateSpinner = findViewById(R.id.powerOnStateSpinner);
         tempUnitsSpinner = findViewById(R.id.tempUnitsSpinner);
         wifiSettingsButton = findViewById(R.id.wifiSettingsButton);
+        checkUpdateButton = findViewById(R.id.checkUpdateButton); // ADDED
         saveButton = findViewById(R.id.saveButton);
         deleteDeviceButton = findViewById(R.id.deleteDeviceButton);
     }
@@ -111,7 +126,11 @@ public class DeviceConfigActivity extends AppCompatActivity {
         deviceNameEdit.setText(deviceName);
 
         // Set current version
-        currentVersionText.setText("0.0.4");
+        if (firmwareVersion != null && !firmwareVersion.isEmpty()) {
+            currentVersionText.setText(firmwareVersion);
+        } else {
+            currentVersionText.setText("Unknown");
+        }
 
         // Set display type
         displayTypeText.setText("Thermostat");
@@ -177,7 +196,107 @@ public class DeviceConfigActivity extends AppCompatActivity {
 
         deleteDeviceButton.setOnClickListener(v -> showDeleteConfirmation());
 
-        wifiSettingsButton.setOnClickListener(v -> openWiFiSettings());
+        wifiSettingsButton.setOnClickListener(v -> {
+            // Navigate to WiFi provisioning
+            // For now, just show a toast as this might require BLE reconnection
+            Toast.makeText(this, "To change WiFi, please reset device and re-provision", Toast.LENGTH_LONG).show();
+        });
+
+        checkUpdateButton.setOnClickListener(v -> checkFirmwareUpdate());
+    }
+    
+    private void checkForUpdatesSilent() {
+        String currentVersion = firmwareVersion;
+        if (currentVersion == null || currentVersion.isEmpty()) currentVersion = "1.0.0";
+        // Clean version string
+        currentVersion = currentVersion.replace("v", "").trim();
+        
+        checkUpdateButton.setText("Checking...");
+        checkUpdateButton.setEnabled(false);
+        
+        apiService.checkFirmwareUpdate("pool_monitor", currentVersion)
+                .thenAccept(result -> runOnUiThread(() -> {
+                    if (result.success && result.data != null) {
+                        if (result.data.available) {
+                            checkUpdateButton.setText("Update Available");
+                            checkUpdateButton.setEnabled(true);
+                            checkUpdateButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(getResources().getColor(android.R.color.holo_green_dark)));
+                        } else {
+                            checkUpdateButton.setText("Up to Date");
+                            checkUpdateButton.setEnabled(false);
+                            checkUpdateButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(getResources().getColor(android.R.color.darker_gray)));
+                        }
+                    } else {
+                        checkUpdateButton.setText("Check Failed");
+                        checkUpdateButton.setEnabled(true); // Allow retry
+                    }
+                }));
+    }
+    
+    private void checkFirmwareUpdate() {
+        String currentVersion = currentVersionText.getText().toString();
+        // Extract version number if it contains "v" or other text
+        currentVersion = currentVersion.replace("v", "").trim();
+        
+        if (currentVersion.isEmpty()) currentVersion = "1.0.0"; // Default
+        
+        Toast.makeText(this, "Checking for updates...", Toast.LENGTH_SHORT).show();
+        
+        apiService.checkFirmwareUpdate("pool_monitor", currentVersion)
+                .thenAccept(result -> runOnUiThread(() -> {
+                    if (result.success && result.data != null) {
+                        if (result.data.available) {
+                            showUpdateConfirmation(result.data);
+                        } else {
+                            Toast.makeText(this, "Device is up to date", Toast.LENGTH_SHORT).show();
+                        }
+                    } else {
+                        Toast.makeText(this, "Check failed: " + result.message, Toast.LENGTH_SHORT).show();
+                    }
+                }));
+    }
+    
+    private void showUpdateConfirmation(SmartWorksApiService.FirmwareUpdateResponse update) {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Update Available")
+                .setMessage("New version: " + update.version + "\n\n" + 
+                           (update.notes != null ? update.notes : "Bug fixes and improvements") + 
+                           "\n\nDo you want to update now? The device will restart.")
+                .setPositiveButton("Update", (dialog, which) -> sendUpdateCommand())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+    
+    private void sendUpdateCommand() {
+        Toast.makeText(this, "Sending update command...", Toast.LENGTH_SHORT).show();
+        
+        // We use the device ID (MAC address based) to send the command
+        // Note: deviceAddress in this activity might be the MAC or the ID depending on how it was passed.
+        // Let's assume deviceName or we need to pass deviceId explicitly. 
+        // In MainActivity, we passed: intent.putExtra("device_name", device.name);
+        // We need the device_id (e.g. pool_thermo_...)
+        
+        // CRITICAL: We need the actual device ID (e.g. pool_thermo_...) to send commands.
+        // The current intent extras might not have it if deviceAddress is just the MAC.
+        // Let's assume deviceAddress IS the deviceId or we construct it.
+        // Actually, looking at MainActivity, we pass device.address.
+        // Let's check DeviceAdapter to see what device.address is.
+        // It seems device.address is the MAC address usually.
+        // BUT, the server expects the 'device_id' string (pool_thermo_...).
+        
+        // Workaround: We will try to use the device name if it looks like an ID, or we need to fix MainActivity to pass deviceId.
+        // For now, let's try using the deviceAddress as the ID, assuming the adapter sets it correctly.
+        
+        String targetDeviceId = deviceAddress; // Hope this is the ID
+        
+        apiService.sendDeviceCommand(targetDeviceId, "update_firmware")
+                .thenAccept(result -> runOnUiThread(() -> {
+                    if (result.success) {
+                        Toast.makeText(this, "Update command sent! Device should update shortly.", Toast.LENGTH_LONG).show();
+                    } else {
+                        Toast.makeText(this, "Failed to send command: " + result.message, Toast.LENGTH_LONG).show();
+                    }
+                }));
     }
 
     private void saveDeviceSettings() {

@@ -177,6 +177,7 @@ public class MainActivity extends AppCompatActivity implements AuthenticationMan
                 intent.putExtra("device_address", device.address);
                 intent.putExtra("device_ip", device.ipAddress);
                 intent.putExtra("wifi_ssid", device.wifiSSID);
+                intent.putExtra("firmware_version", device.firmwareVersion); // ADDED
                 intent.putExtra("device_position", position);
                 startActivityForResult(intent, DEVICE_CONFIG_REQUEST);
             });
@@ -397,6 +398,7 @@ public class MainActivity extends AppCompatActivity implements AuthenticationMan
                             deviceInfo.status = serverDevice.statusMessage != null ?
                                     serverDevice.statusMessage : serverDevice.status;
                             deviceInfo.rssi = serverDevice.rssi;
+                            deviceInfo.firmwareVersion = serverDevice.firmwareVersion; // ADDED
 
                             provisionedDevices.add(deviceInfo);
                         }
@@ -496,6 +498,9 @@ public class MainActivity extends AppCompatActivity implements AuthenticationMan
                 }
                 if (device.statusMessage != null) {
                     deviceInfo += "\nStatus: " + device.statusMessage;
+                }
+                if (device.firmwareVersion != null) { // ADDED
+                    deviceInfo += "\nVersion: " + device.firmwareVersion;
                 }
 
                 deviceSet.add(deviceInfo);

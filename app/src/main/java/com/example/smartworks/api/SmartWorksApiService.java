@@ -311,6 +311,45 @@ public class SmartWorksApiService {
         return future;
     }
     
+    /**
+     * Check for firmware updates
+     */
+    public CompletableFuture<ApiResult<FirmwareUpdateResponse>> checkFirmwareUpdate(String deviceType, String currentVersion) {
+        CompletableFuture<ApiResult<FirmwareUpdateResponse>> future = new CompletableFuture<>();
+        
+        executorService.execute(() -> {
+            try {
+                String url = BASE_URL + "api/firmware/check.php?device_type=" + deviceType + "&current_version=" + currentVersion;
+                
+                Request httpRequest = new Request.Builder()
+                        .url(url)
+                        .get()
+                        .build();
+                
+                Response response = httpClient.newCall(httpRequest).execute();
+                String responseBody = response.body().string();
+                
+                if (response.isSuccessful()) {
+                    FirmwareUpdateResponse updateResponse = gson.fromJson(responseBody, FirmwareUpdateResponse.class);
+                    
+                    if (updateResponse != null) {
+                        future.complete(ApiResult.success("Check complete", updateResponse));
+                    } else {
+                        future.complete(ApiResult.error("Invalid response from server"));
+                    }
+                } else {
+                    future.complete(ApiResult.error("Failed to check for updates"));
+                }
+                
+            } catch (Exception e) {
+                Log.e(TAG, "Check firmware error", e);
+                future.complete(ApiResult.error("Network error: " + e.getMessage()));
+            }
+        });
+        
+        return future;
+    }
+    
     // Data classes for API communication
     public static class ApiResult<T> {
         public final boolean success;
@@ -486,6 +525,14 @@ public class SmartWorksApiService {
     private static class ErrorResponse {
         String status;
         String message;
+    }
+    
+    public static class FirmwareUpdateResponse {
+        public boolean available;
+        public String version;
+        public String url;
+        public String notes;
+        public String message;
     }
     
     // HTTP Interceptors

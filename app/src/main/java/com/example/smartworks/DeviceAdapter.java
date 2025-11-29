@@ -800,6 +800,7 @@ public class DeviceAdapter extends BaseAdapter {
         public String temperature;
         public String status;
         public Integer rssi;
+        public String firmwareVersion; // ADDED
 
         public DeviceInfo(String name, String address, String wifiSSID) {
             this.name = name;
@@ -808,6 +809,7 @@ public class DeviceAdapter extends BaseAdapter {
             this.temperature = "Loading...";
             this.status = "Connecting...";
             this.rssi = null;
+            this.firmwareVersion = "Unknown"; // ADDED
         }
 
         public static DeviceInfo fromStoredString(String deviceString) {
@@ -829,8 +831,22 @@ public class DeviceAdapter extends BaseAdapter {
                     status = line.substring(8);
                 } else if (line.startsWith("IP: ")) {
                     ipAddress = line.substring(4);
+                } else if (line.startsWith("Version: ")) { // ADDED
+                    // Parse version
+                    // Format: Version: 1.0.3
+                    // We need to handle this in the loop
                 } else if (i == 1 && !line.contains(":")) {
                     address = line;
+                }
+            }
+            
+            // Second pass to get version if needed, or just add it to the loop above
+            // Actually, let's just add a variable
+            String firmwareVersion = "Unknown";
+            
+            for (String line : lines) {
+                if (line.startsWith("Version: ")) {
+                    firmwareVersion = line.substring(9);
                 }
             }
 
@@ -838,6 +854,7 @@ public class DeviceAdapter extends BaseAdapter {
             device.temperature = temperature;
             device.status = status;
             device.ipAddress = ipAddress;
+            device.firmwareVersion = firmwareVersion; // ADDED
             return device;
         }
 
@@ -884,6 +901,9 @@ public class DeviceAdapter extends BaseAdapter {
             }
             if (status != null && !status.isEmpty()) {
                 sb.append("\nStatus: ").append(status);
+            }
+            if (firmwareVersion != null && !firmwareVersion.isEmpty()) {
+                sb.append("\nVersion: ").append(firmwareVersion); // ADDED
             }
             return sb.toString();
         }
