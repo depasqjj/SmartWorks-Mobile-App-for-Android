@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- WiFi Selection Layout -->
+    <LinearLayout
+        android:id="@+id/wifiSelectionLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Select WiFi Network"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Choose a 2.4GHz WiFi network to provision your ESP32 device"
+            android:textSize="14sp"
+            android:textColor="@android:color/darker_gray"
+            android:layout_marginBottom="16dp" />
+
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:id="@+id/wifiStatusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Scanning for networks..."
+                android:textSize="14sp"
+                android:layout_alignParentLeft="true"
+                android:layout_centerVertical="true" />
+
+            <Button
+                android:id="@+id/refreshWifiButton"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="Refresh"
+                android:textSize="12sp"
+                android:layout_alignParentRight="true"
+                style="?android:attr/buttonStyleSmall" />
+
+        </RelativeLayout>
+
+        <ProgressBar
+            android:id="@+id/wifiProgressBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:indeterminate="true"
+            android:visibility="gone"
+            android:layout_marginBottom="8dp" />
+
+        <ListView
+            android:id="@+id/wifiNetworksList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:choiceMode="singleChoice"
+            android:divider="@android:color/darker_gray"
+            android:dividerHeight="1dp" />
+
+        <Button
+            android:id="@+id/provisionButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Select a network first"
+            android:layout_marginTop="16dp"
+            android:enabled="false"
+            android:textSize="16sp"
+            android:padding="12dp" />
+
+    </LinearLayout>
+
+    <!-- Provisioning Progress Layout -->
+    <LinearLayout
+        android:id="@+id/provisioningLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:gravity="center"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:src="@android:drawable/ic_dialog_info"
+            android:layout_marginBottom="24dp"
+            android:tint="@android:color/holo_blue_dark" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Provisioning ESP32 Device"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:layout_marginBottom="16dp" />
+
+        <ProgressBar
+            android:id="@+id/provisioningProgressBar"
+            android:layout_width="60dp"
+            android:layout_height="60dp"
+            android:layout_marginBottom="24dp"
+            android:indeterminate="true" />
+
+        <TextView
+            android:id="@+id/provisioningStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Starting provisioning process..."
+            android:textSize="16sp"
+            android:gravity="center"
+            android:layout_marginBottom="16dp"
+            android:minHeight="80dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Please keep your phone close to the ESP32 device during this process."
+            android:textSize="12sp"
+            android:textColor="@android:color/darker_gray"
+            android:gravity="center"
+            android:layout_marginTop="16dp" />
+
+    </LinearLayout>
+
+</LinearLayout>

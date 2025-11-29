@@ -1,0 +1,32 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# SmartWorks - Exclude Server and Firmware (separate repos)
+/server/
+/esp32_code/
+/api/
+
+# Exclude root-level backups and temp files
+/*.php
+/*.ino
+/*.java
+/*.zip
+/ANDROID_FIX_SUMMARY.md
+/AUTHENTICATION_SETUP.md
+/COMPILATION_FIX_COMPLETE.md
+/ESP32_Pool_Integration_README.md
+/ESP32_Troubleshooting_Guide.md
+/IMPLEMENTATION_COMPLETE.md

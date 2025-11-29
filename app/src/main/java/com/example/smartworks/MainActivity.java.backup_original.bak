@@ -1,0 +1,783 @@
+// MainActivity.java - Dashboard Activity
+package com.example.smartworks;
+
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.ListView;
+import android.widget.Toast;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "MainActivity";
+    private static final int DEVICE_SCAN_REQUEST = 1;
+    private static final int DEVICE_CONFIG_REQUEST = 2;
+
+    private ListView devicesList;
+    private View emptyStateText;
+    private FloatingActionButton addDeviceFab;
+    private SwipeRefreshLayout swipeRefreshLayout;
+
+    private DeviceAdapter devicesAdapter;
+    private List<DeviceAdapter.DeviceInfo> provisionedDevices;
+    private ExecutorService executorService;
+    private boolean isRefreshing = false;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        Log.d(TAG, "MainActivity onCreate started");
+
+        try {
+            setContentView(R.layout.activity_main);
+            Log.d(TAG, "Layout set successfully");
+
+            // Initialize executor service for background tasks
+            executorService = Executors.newSingleThreadExecutor();
+
+            // Setup action bar
+            if (getSupportActionBar() != null) {
+                getSupportActionBar().setTitle("SmartWorks Dashboard");
+            }
+
+            initializeViews();
+            Log.d(TAG, "Views initialized successfully");
+
+            loadProvisionedDevices();
+            Log.d(TAG, "Devices loaded successfully");
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error in onCreate", e);
+            Toast.makeText(this, "Error initializing app: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            finish();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (executorService != null && !executorService.isShutdown()) {
+            executorService.shutdown();
+        }
+        if (devicesAdapter != null) {
+            devicesAdapter.cleanup();
+        }
+    }
+
+    private void initializeViews() {
+        try {
+            devicesList = findViewById(R.id.devicesList);
+            emptyStateText = findViewById(R.id.emptyStateText);
+            addDeviceFab = findViewById(R.id.addDeviceFab);
+            swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
+
+            if (devicesList == null || emptyStateText == null || addDeviceFab == null || swipeRefreshLayout == null) {
+                throw new RuntimeException("Failed to find required views in layout");
+            }
+
+            // Initialize devices list
+            provisionedDevices = new ArrayList<>();
+            devicesAdapter = new DeviceAdapter(this, provisionedDevices);
+            
+            // Set device config listener
+            devicesAdapter.setOnDeviceConfigListener((device, position) -> {
+                Intent intent = new Intent(MainActivity.this, DeviceConfigActivity.class);
+                intent.putExtra("device_name", device.name);
+                intent.putExtra("device_address", device.address);
+                intent.putExtra("device_ip", device.ipAddress);
+                intent.putExtra("wifi_ssid", device.wifiSSID);
+                intent.putExtra("device_position", position);
+                startActivityForResult(intent, DEVICE_CONFIG_REQUEST);
+            });
+            
+            devicesList.setAdapter(devicesAdapter);
+
+            // Set up SwipeRefreshLayout
+            swipeRefreshLayout.setColorSchemeResources(
+                    android.R.color.holo_blue_bright,
+                    android.R.color.holo_green_light,
+                    android.R.color.holo_orange_light,
+                    android.R.color.holo_red_light
+            );
+            swipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
+                @Override
+                public void onRefresh() {
+                    Log.d(TAG, "Pull-to-refresh triggered");
+                    refreshAllDevices();
+                }
+            });
+
+            // Set up FAB click listener
+            addDeviceFab.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Log.d(TAG, "Add device button clicked");
+                    try {
+                        startDeviceScan();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error starting device scan", e);
+                        Toast.makeText(MainActivity.this, "Error starting device scan: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    }
+                }
+            });
+
+            // Set up device list item click listener
+            devicesList.setOnItemClickListener((parent, view, position, id) -> {
+                try {
+                    DeviceAdapter.DeviceInfo device = provisionedDevices.get(position);
+
+                    // Get IP address from adapter
+                    String ipAddress = devicesAdapter.getDeviceIP(position);
+                    if (ipAddress != null && !ipAddress.equals("Not Found") && !ipAddress.equals("Discovering...")) {
+                        // Open web interface
+                        Intent browserIntent = new Intent(Intent.ACTION_VIEW);
+                        browserIntent.setData(android.net.Uri.parse("http://" + ipAddress));
+                        startActivity(browserIntent);
+                    } else {
+                        // Show manual IP entry dialog
+                        showManualIPDialog(device, position);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error handling device click", e);
+                    Toast.makeText(MainActivity.this, "Error opening device: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            });
+
+            // Set up device list long click for device management
+            devicesList.setOnItemLongClickListener((parent, view, position, id) -> {
+                try {
+                    DeviceAdapter.DeviceInfo device = provisionedDevices.get(position);
+                    showDeviceManagementDialog(device, position);
+                    return true;
+                } catch (Exception e) {
+                    Log.e(TAG, "Error handling device long click", e);
+                    return false;
+                }
+            });
+
+            updateEmptyState();
+        } catch (Exception e) {
+            Log.e(TAG, "Error initializing views", e);
+            Toast.makeText(this, "Error setting up interface: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        // Add refresh option to the action bar menu
+        menu.add(0, 1, 0, "Refresh")
+                .setIcon(android.R.drawable.ic_popup_sync)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
+
+        // Add force rediscovery option for when devices restart
+        menu.add(0, 2, 1, "Find Devices")
+                .setIcon(android.R.drawable.ic_menu_search)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+
+        // Add debug option
+        menu.add(0, 3, 2, "Debug Connection")
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+        
+        // Add network test option
+        menu.add(0, 4, 3, "Network Test")
+                .setIcon(android.R.drawable.ic_menu_manage)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+        
+        // Add Pool Monitor option
+        menu.add(0, 5, 4, "🏊‍♂️ Pool Monitor")
+                .setIcon(android.R.drawable.ic_menu_view)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == 1) {
+            // Refresh menu item clicked
+            refreshAllDevices();
+            return true;
+        } else if (item.getItemId() == 2) {
+            // Force IP rediscovery menu item clicked
+            forceIPRediscovery();
+            return true;
+        } else if (item.getItemId() == 3) {
+            // Debug connection
+            debugConnection();
+            return true;
+        } else if (item.getItemId() == 4) {
+            // Network test
+            startActivity(new Intent(this, NetworkTestActivity.class));
+            return true;
+        } else if (item.getItemId() == 5) {
+            // Pool Monitor
+            Intent poolIntent = new Intent(this, PoolMonitorActivity.class);
+            startActivity(poolIntent);
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    private void debugConnection() {
+        if (provisionedDevices.isEmpty()) {
+            Toast.makeText(this, "No devices to debug", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Test connection to the first device (or you can make it select which one)
+        DeviceAdapter.DeviceInfo firstDevice = provisionedDevices.get(0);
+        if (firstDevice.ipAddress != null && !firstDevice.ipAddress.isEmpty()) {
+            Toast.makeText(this, "Testing connection to " + firstDevice.name + " at " + firstDevice.ipAddress + "\nCheck logs for details", Toast.LENGTH_LONG).show();
+
+            if (devicesAdapter != null) {
+                devicesAdapter.testDeviceConnection(firstDevice.name, firstDevice.ipAddress);
+            }
+        } else {
+            Toast.makeText(this, "No IP address available for " + firstDevice.name, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void forceIPRediscovery() {
+        if (isRefreshing) {
+            Toast.makeText(this, "Refresh already in progress...", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Log.d(TAG, "Force IP rediscovery triggered");
+
+        if (provisionedDevices.isEmpty()) {
+            Toast.makeText(this, "No devices to find", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        isRefreshing = true;
+
+        // Show rediscovery message
+        Toast.makeText(this, "Searching for devices on network...", Toast.LENGTH_LONG).show();
+
+        // Force IP rediscovery in adapter
+        if (devicesAdapter != null) {
+            devicesAdapter.forceIPRediscovery();
+        }
+
+        // Set a longer timer for IP discovery (can take longer)
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            isRefreshing = false;
+            if (swipeRefreshLayout != null) {
+                swipeRefreshLayout.setRefreshing(false);
+            }
+            Toast.makeText(MainActivity.this, "Device search completed", Toast.LENGTH_SHORT).show();
+        }, 10000); // 10 seconds for IP discovery
+    }
+
+    private void refreshAllDevices() {
+        if (isRefreshing) {
+            swipeRefreshLayout.setRefreshing(false);
+            Toast.makeText(this, "Refresh already in progress...", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Log.d(TAG, "Starting refresh of all devices");
+
+        if (provisionedDevices.isEmpty()) {
+            swipeRefreshLayout.setRefreshing(false);
+            Toast.makeText(this, "No devices to refresh", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        isRefreshing = true;
+
+        // Show refresh message
+        Toast.makeText(this, "Refreshing device data...", Toast.LENGTH_SHORT).show();
+
+        // Use the adapter's refresh method
+        if (devicesAdapter != null) {
+            devicesAdapter.refreshAllDevices();
+        }
+
+        // Set a timer to stop the refresh indicator after a reasonable time
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            isRefreshing = false;
+            if (swipeRefreshLayout != null) {
+                swipeRefreshLayout.setRefreshing(false);
+            }
+            Toast.makeText(MainActivity.this, "Refresh completed", Toast.LENGTH_SHORT).show();
+        }, 3000); // Stop refresh indicator after 3 seconds
+    }
+
+    private void loadProvisionedDevices() {
+        try {
+            // Load devices from SharedPreferences
+            SharedPreferences prefs = getSharedPreferences("SmartWorks", Context.MODE_PRIVATE);
+            Set<String> deviceSet = prefs.getStringSet("provisioned_devices", new HashSet<>());
+
+            provisionedDevices.clear();
+            if (deviceSet != null) {
+                for (String deviceString : deviceSet) {
+                    DeviceAdapter.DeviceInfo device = DeviceAdapter.DeviceInfo.fromStoredString(deviceString, this);
+                    provisionedDevices.add(device);
+                }
+            }
+
+            if (devicesAdapter != null) {
+                devicesAdapter.notifyDataSetChanged();
+            }
+
+            Log.d(TAG, "Loaded " + provisionedDevices.size() + " devices from storage");
+            updateEmptyState();
+        } catch (Exception e) {
+            Log.e(TAG, "Error loading devices from storage", e);
+            Toast.makeText(this, "Error loading saved devices", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateEmptyState() {
+        if (provisionedDevices.isEmpty()) {
+            devicesList.setVisibility(View.GONE);
+            emptyStateText.setVisibility(View.VISIBLE);
+        } else {
+            devicesList.setVisibility(View.VISIBLE);
+            emptyStateText.setVisibility(View.GONE);
+        }
+    }
+
+    private void startDeviceScan() {
+        Log.d(TAG, "Starting device scan activity");
+        Intent intent = new Intent(this, DeviceScanActivity.class);
+        startActivityForResult(intent, DEVICE_SCAN_REQUEST);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        Log.d(TAG, "onActivityResult: requestCode=" + requestCode + ", resultCode=" + resultCode + ", data=" + (data != null));
+
+        try {
+            if (requestCode == DEVICE_SCAN_REQUEST) {
+                if (resultCode == RESULT_OK) {
+                    if (data != null) {
+                        handleProvisioningResult(data);
+                    } else {
+                        Log.w(TAG, "Provisioning successful but no data received");
+                        Toast.makeText(this, "Device provisioned but details not available", Toast.LENGTH_SHORT).show();
+                    }
+                } else {
+                    Log.d(TAG, "Provisioning was cancelled or failed (resultCode=" + resultCode + ")");
+                }
+            } else if (requestCode == DEVICE_CONFIG_REQUEST) {
+                if (resultCode == RESULT_OK && data != null) {
+                    handleDeviceConfigResult(data);
+                } else {
+                    // Just reload devices to make sure we have latest data
+                    loadProvisionedDevices();
+                    if (devicesAdapter != null) {
+                        devicesAdapter.notifyDataSetChanged();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error in onActivityResult", e);
+            Toast.makeText(this, "Error processing result: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void handleDeviceConfigResult(Intent data) {
+        try {
+            if (data.getBooleanExtra("device_deleted", false)) {
+                // Device was deleted, remove it from list
+                int position = data.getIntExtra("device_position", -1);
+                if (position >= 0 && position < provisionedDevices.size()) {
+                    DeviceAdapter.DeviceInfo deletedDevice = provisionedDevices.get(position);
+                    provisionedDevices.remove(position);
+                    devicesAdapter.notifyDataSetChanged();
+                    updateEmptyState();
+                    Toast.makeText(this, "Device '" + deletedDevice.name + "' deleted", Toast.LENGTH_SHORT).show();
+                    Log.d(TAG, "Device deleted via config: " + deletedDevice.name);
+                }
+            } else if (data.hasExtra("updated_device_name")) {
+                // Device name was updated
+                String newName = data.getStringExtra("updated_device_name");
+                String originalName = data.getStringExtra("original_device_name");
+                int position = data.getIntExtra("device_position", -1);
+                
+                if (position >= 0 && position < provisionedDevices.size() && newName != null) {
+                    DeviceAdapter.DeviceInfo device = provisionedDevices.get(position);
+                    Log.d(TAG, "Updating device name from '" + device.name + "' to '" + newName + "'");
+                    
+                    // Update device name in memory
+                    device.name = newName;
+                    
+                    // Update the stored device list
+                    updateDeviceInStorage(originalName, device);
+                    
+                    devicesAdapter.notifyDataSetChanged();
+                    Toast.makeText(this, "Device renamed to '" + newName + "'", Toast.LENGTH_SHORT).show();
+                }
+            }
+            
+            // Always reload to get the latest configuration
+            loadProvisionedDevices();
+            if (devicesAdapter != null) {
+                devicesAdapter.refreshAllDevices();
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error handling device config result", e);
+            Toast.makeText(this, "Error processing configuration changes", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateDeviceInStorage(String originalName, DeviceAdapter.DeviceInfo updatedDevice) {
+        try {
+            SharedPreferences prefs = getSharedPreferences("SmartWorks", Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = prefs.edit();
+            
+            // Get existing devices
+            Set<String> deviceSet = new HashSet<>(prefs.getStringSet("provisioned_devices", new HashSet<>()));
+            
+            // Remove old entry
+            deviceSet.removeIf(deviceString -> deviceString.startsWith(originalName + "\n") || deviceString.equals(originalName));
+            
+            // Add updated entry
+            deviceSet.add(updatedDevice.toStoredString());
+            
+            // Save updated set
+            editor.putStringSet("provisioned_devices", deviceSet);
+            editor.apply();
+            
+            Log.d(TAG, "Updated device in storage: " + updatedDevice.name);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating device in storage", e);
+        }
+    }
+
+    private void handleProvisioningResult(Intent data) {
+        try {
+            String originalDeviceName = data.getStringExtra("device_name");
+            String originalDeviceAddress = data.getStringExtra("device_address");
+            String originalWifiSSID = data.getStringExtra("wifi_ssid");
+
+            Log.d(TAG, "Processing result: name='" + originalDeviceName + "', address='" + originalDeviceAddress + "', ssid='" + originalWifiSSID + "'");
+
+            // Create final variables for lambda expressions
+            final String deviceName = (originalDeviceName == null || originalDeviceName.trim().isEmpty()) ? "ESP32 Device" : originalDeviceName;
+            final String deviceAddress = (originalDeviceAddress == null || originalDeviceAddress.trim().isEmpty()) ? "Unknown Address" : originalDeviceAddress;
+            final String wifiSSID = (originalWifiSSID == null || originalWifiSSID.trim().isEmpty()) ? "Unknown Router" : originalWifiSSID;
+
+            // Create device info object
+            DeviceAdapter.DeviceInfo newDevice = new DeviceAdapter.DeviceInfo(deviceName, deviceAddress, wifiSSID);
+
+            // Remove any existing device with same name to avoid duplicates
+            provisionedDevices.removeIf(device -> device.name.equals(deviceName));
+
+            // Add new device
+            provisionedDevices.add(newDevice);
+
+            if (devicesAdapter != null) {
+                devicesAdapter.notifyDataSetChanged();
+            }
+
+            updateEmptyState();
+
+            // Save to storage
+            saveProvisionedDevice(deviceName, deviceAddress, wifiSSID);
+
+            // Show success message
+            runOnUiThread(() -> {
+                Toast.makeText(MainActivity.this, "Device '" + deviceName + "' added successfully!", Toast.LENGTH_LONG).show();
+            });
+
+            Log.d(TAG, "Device successfully added to dashboard");
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error handling provisioning result", e);
+            Toast.makeText(this, "Error adding device: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void saveProvisionedDevice(String deviceName, String deviceAddress, String wifiSSID) {
+        try {
+            // Save device info to SharedPreferences
+            SharedPreferences prefs = getSharedPreferences("SmartWorks", Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = prefs.edit();
+
+            // Get existing devices
+            Set<String> deviceSet = new HashSet<>(prefs.getStringSet("provisioned_devices", new HashSet<>()));
+
+            // Create device info string with consistent format
+            String deviceInfo = deviceName;
+            if (deviceAddress != null && !deviceAddress.trim().isEmpty()) {
+                deviceInfo += "\n" + deviceAddress;
+            }
+            if (wifiSSID != null && !wifiSSID.trim().isEmpty()) {
+                deviceInfo += "\nRouter: " + wifiSSID;
+            }
+            deviceInfo += "\nTemperature: Loading...";
+            deviceInfo += "\nStatus: Online";
+
+            // Remove any existing entry for this device (by name) to avoid duplicates
+            deviceSet.removeIf(existing -> existing.startsWith(deviceName + "\n") || existing.equals(deviceName));
+
+            // Add the new/updated device
+            deviceSet.add(deviceInfo);
+
+            // Save to preferences
+            editor.putStringSet("provisioned_devices", deviceSet);
+            boolean success = editor.commit();
+
+            Log.d(TAG, "Device save result: " + success);
+            Log.d(TAG, "Saved device info: " + deviceInfo);
+            Log.d(TAG, "Total devices in storage: " + deviceSet.size());
+
+            // Verify the save by reading it back
+            Set<String> savedDevices = prefs.getStringSet("provisioned_devices", new HashSet<>());
+            Log.d(TAG, "Verification - devices in storage: " + savedDevices.size());
+            for (String device : savedDevices) {
+                Log.d(TAG, "Stored device: " + device);
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error saving device to storage", e);
+            Toast.makeText(this, "Warning: Device may not persist after app restart", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String extractIPFromDeviceInfo(String deviceInfo) {
+        // Look for IP pattern in device info string
+        String[] lines = deviceInfo.split("\n");
+        for (String line : lines) {
+            if (line.startsWith("IP: ")) {
+                return line.substring(4);
+            }
+        }
+        return null;
+    }
+
+    private void discoverDeviceOnNetwork(String deviceInfo) {
+        // TODO: Implement network discovery
+        // For now, just show a message
+        Toast.makeText(this, "Searching for device on network...", Toast.LENGTH_SHORT).show();
+
+        // You could implement mDNS discovery here to find esp32-pool-monitor.local
+        // Or scan common IP ranges for the web server
+    }
+
+    private void showDeviceManagementDialog(DeviceAdapter.DeviceInfo device, int position) {
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this);
+        builder.setTitle("Manage Device: " + device.name);
+        builder.setMessage("What would you like to do with this device?");
+
+        builder.setPositiveButton("Configure IP", (dialog, which) -> {
+            showManualIPDialog(device, position);
+        });
+
+        builder.setNegativeButton("Delete Device", (dialog, which) -> {
+            deleteDevice(device, position);
+        });
+
+        builder.setNeutralButton("Cancel", null);
+        builder.show();
+    }
+
+    private void deleteDevice(DeviceAdapter.DeviceInfo device, int position) {
+        android.app.AlertDialog.Builder confirmBuilder = new android.app.AlertDialog.Builder(this);
+        confirmBuilder.setTitle("Delete Device");
+        confirmBuilder.setMessage("Are you sure you want to delete \"" + device.name + "\"?\n\nThis will remove it from your device list.");
+        
+        confirmBuilder.setPositiveButton("Delete", (dialog, which) -> {
+            try {
+                // Remove from list
+                provisionedDevices.remove(position);
+                devicesAdapter.notifyDataSetChanged();
+                updateEmptyState();
+                
+                // Remove from storage
+                removeDeviceFromStorage(device);
+                
+                Toast.makeText(this, "Device \"" + device.name + "\" deleted successfully", Toast.LENGTH_SHORT).show();
+                Log.d(TAG, "Device deleted: " + device.name);
+                
+            } catch (Exception e) {
+                Log.e(TAG, "Error deleting device", e);
+                Toast.makeText(this, "Error deleting device: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
+        
+        confirmBuilder.setNegativeButton("Cancel", null);
+        confirmBuilder.show();
+    }
+    
+    private void removeDeviceFromStorage(DeviceAdapter.DeviceInfo device) {
+        try {
+            SharedPreferences prefs = getSharedPreferences("SmartWorks", Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = prefs.edit();
+            
+            // Get existing devices
+            Set<String> deviceSet = new HashSet<>(prefs.getStringSet("provisioned_devices", new HashSet<>()));
+            
+            // Remove devices with matching name
+            deviceSet.removeIf(deviceString -> deviceString.startsWith(device.name + "\n") || deviceString.equals(device.name));
+            
+            // Save updated set
+            editor.putStringSet("provisioned_devices", deviceSet);
+            editor.apply();
+            
+            Log.d(TAG, "Device removed from storage: " + device.name);
+            Log.d(TAG, "Remaining devices in storage: " + deviceSet.size());
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error removing device from storage", e);
+        }
+    }
+
+    private void showManualIPDialog(DeviceAdapter.DeviceInfo device, int position) {
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this);
+        builder.setTitle("Connect to " + device.name);
+        builder.setMessage("Device IP not found automatically.\n\nEnter the IP address of your ESP32 device:\n\nTip: Check your router's device list or ESP32 Serial Monitor for the current IP address.");
+
+        final android.widget.EditText ipInput = new android.widget.EditText(this);
+        ipInput.setHint("192.168.0.132");
+        ipInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+
+        // Pre-fill with the known working IP
+        ipInput.setText("192.168.0.132");
+
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setPadding(50, 40, 50, 10);
+        layout.addView(ipInput);
+        builder.setView(layout);
+
+        builder.setPositiveButton("Test & Connect", (dialog, which) -> {
+            String ipAddress = ipInput.getText().toString().trim();
+            if (!ipAddress.isEmpty()) {
+                // Test the IP address and update device
+                testAndSetIP(ipAddress, device, position);
+            } else {
+                Toast.makeText(this, "Please enter an IP address", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        builder.setNegativeButton("Cancel", null);
+
+        builder.setNeutralButton("Scan Again", (dialog, which) -> {
+            Toast.makeText(this, "Starting network scan...", Toast.LENGTH_SHORT).show();
+            // Trigger a forced IP rediscovery for this device
+            if (devicesAdapter != null) {
+                device.ipAddress = null; // Clear IP to force rediscovery
+                devicesAdapter.refreshDevice(position);
+            }
+        });
+
+        builder.show();
+    }
+
+    private void testAndSetIP(String ipAddress, DeviceAdapter.DeviceInfo device, int position) {
+        // Test the IP in background
+        executorService.execute(() -> {
+            boolean success = false;
+            try {
+                java.net.URL url = new java.net.URL("http://" + ipAddress + "/data");
+                java.net.HttpURLConnection connection = (java.net.HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setRequestMethod("GET");
+                int responseCode = connection.getResponseCode();
+                connection.disconnect();
+
+                if (responseCode == 200) {
+                    success = true;
+                    // Update device IP
+                    device.ipAddress = ipAddress;
+                    device.status = "Manual IP Set";
+                    device.temperature = "Loading...";
+
+                    // Save the new IP
+                    if (devicesAdapter != null) {
+                        devicesAdapter.updateStoredDeviceIP(device, ipAddress);
+                    }
+
+                    // Trigger data refresh
+                    if (devicesAdapter != null) {
+                        devicesAdapter.fetchDeviceData(device, position);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Manual IP test failed: " + e.getMessage());
+            }
+
+            // Update UI on main thread
+            final boolean finalSuccess = success;
+            runOnUiThread(() -> {
+                if (finalSuccess) {
+                    Toast.makeText(MainActivity.this, "IP address verified! Fetching device data...", Toast.LENGTH_SHORT).show();
+                    devicesAdapter.notifyDataSetChanged();
+                } else {
+                    Toast.makeText(MainActivity.this, "Could not connect to " + ipAddress + ".\n\nPlease check:\n• IP address is correct\n• ESP32 is powered on\n• ESP32 is connected to WiFi", Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void testAndOpenIP(String ipAddress, DeviceAdapter.DeviceInfo device) {
+        // Use modern approach instead of deprecated AsyncTask
+        executorService.execute(() -> {
+            boolean success = false;
+            try {
+                java.net.URL url = new java.net.URL("http://" + ipAddress + "/data");
+                java.net.HttpURLConnection connection = (java.net.HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(3000);
+                connection.setRequestMethod("GET");
+                int responseCode = connection.getResponseCode();
+                connection.disconnect();
+                success = responseCode == 200;
+            } catch (Exception e) {
+                Log.e(TAG, "Error testing IP: " + ipAddress, e);
+            }
+
+            // Update UI on main thread
+            final boolean finalSuccess = success;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                if (finalSuccess) {
+                    // Update device IP if DeviceInfo has ipAddress field
+                    // Note: You may need to add this field to DeviceAdapter.DeviceInfo
+                    try {
+                        // Assuming DeviceInfo has an ipAddress field or setter method
+                        // device.setIpAddress(ipAddress); // or device.ipAddress = ipAddress;
+
+                        Toast.makeText(MainActivity.this, "Connected! Opening device interface...", Toast.LENGTH_SHORT).show();
+
+                        Intent browserIntent = new Intent(Intent.ACTION_VIEW);
+                        browserIntent.setData(android.net.Uri.parse("http://" + ipAddress));
+                        startActivity(browserIntent);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error setting IP address on device", e);
+                        // Still open browser even if we can't save the IP
+                        Intent browserIntent = new Intent(Intent.ACTION_VIEW);
+                        browserIntent.setData(android.net.Uri.parse("http://" + ipAddress));
+                        startActivity(browserIntent);
+                    }
+                } else {
+                    Toast.makeText(MainActivity.this, "Could not connect to " + ipAddress + ". Check the IP address and make sure the device is connected to WiFi.", Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+}

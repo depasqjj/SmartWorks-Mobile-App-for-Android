@@ -1,0 +1,684 @@
+// BLEProvisioningManager.java
+package com.example.smartworks;
+
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
+import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothProfile;
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+import org.json.JSONObject;
+
+public class BLEProvisioningManager_Original {
+    private static final String TAG = "BLEProvisioningManager";
+
+    // ESP32 Provisioning Service UUIDs (standard ESP-IDF provisioning)
+    private static final UUID PROVISIONING_SERVICE_UUID = UUID.fromString("0000ffff-0000-1000-8000-00805f9b34fb");
+
+    // Characteristics for WiFi provisioning
+    private static final UUID WIFI_CONFIG_CHAR_UUID = UUID.fromString("0000ff51-0000-1000-8000-00805f9b34fb");
+    private static final UUID WIFI_STATUS_CHAR_UUID = UUID.fromString("0000ff52-0000-1000-8000-00805f9b34fb");
+    private static final UUID SESSION_CHAR_UUID = UUID.fromString("0000ff53-0000-1000-8000-00805f9b34fb");
+
+    // Client Characteristic Configuration Descriptor
+    private static final UUID CLIENT_CHARACTERISTIC_CONFIG = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+
+    public interface ProvisioningCallback {
+        void onConnected();
+        void onDisconnected();
+        void onProvisioningStarted();
+        void onProvisioningProgress(String message);
+        void onProvisioningSuccess();
+        void onProvisioningFailed(String error);
+        void onError(String error);
+    }
+
+    private Context context;
+    private BluetoothDevice device;
+    private BluetoothGatt bluetoothGatt;
+    private ProvisioningCallback callback;
+    private Handler mainHandler;
+
+    private BluetoothGattCharacteristic wifiConfigChar;
+    private BluetoothGattCharacteristic wifiStatusChar;
+    private BluetoothGattCharacteristic sessionChar;
+
+    private String ssid;
+    private String password;
+    private boolean isConnected = false;
+    private boolean servicesDiscovered = false;
+    private int provisioningStep = 0;
+    private int connectionRetryCount = 0;
+    private static final int MAX_CONNECTION_RETRIES = 3;
+    private static final long CONNECTION_TIMEOUT = 10000; // 10 seconds
+
+    private Runnable connectionTimeoutRunnable;
+
+    // Provisioning steps
+    private static final int STEP_CONNECT = 0;
+    private static final int STEP_DISCOVER_SERVICES = 1;
+    private static final int STEP_SETUP_NOTIFICATIONS = 2;
+    private static final int STEP_START_SESSION = 3;
+    private static final int STEP_SEND_WIFI_CONFIG = 4;
+    private static final int STEP_CHECK_STATUS = 5;
+    private static final int STEP_COMPLETED = 6;
+
+    public BLEProvisioningManager_Original(Context context) {
+        this.context = context;
+        this.mainHandler = new Handler(Looper.getMainLooper());
+    }
+
+    public void startProvisioning(BluetoothDevice device, String ssid, String password, ProvisioningCallback callback) {
+        this.device = device;
+        this.ssid = ssid;
+        this.password = password;
+        this.callback = callback;
+        this.provisioningStep = STEP_CONNECT;
+        this.connectionRetryCount = 0;
+
+        Log.d(TAG, "Starting provisioning for device: " + device.getAddress());
+        Log.d(TAG, "SSID: " + ssid);
+
+        callback.onProvisioningStarted();
+        callback.onProvisioningProgress("Connecting to ESP32...");
+
+        // Set up connection timeout
+        connectionTimeoutRunnable = new Runnable() {
+            @Override
+            public void run() {
+                Log.e(TAG, "Connection timeout after " + CONNECTION_TIMEOUT + "ms");
+                if (!isConnected && connectionRetryCount < MAX_CONNECTION_RETRIES) {
+                    connectionRetryCount++;
+                    Log.d(TAG, "Retrying connection, attempt " + connectionRetryCount + "/" + MAX_CONNECTION_RETRIES);
+                    callback.onProvisioningProgress("Connection timeout, retrying... (" + connectionRetryCount + "/" + MAX_CONNECTION_RETRIES + ")");
+
+                    // Clean up previous connection attempt
+                    if (bluetoothGatt != null) {
+                        try {
+                            bluetoothGatt.disconnect();
+                            bluetoothGatt.close();
+                        } catch (SecurityException e) {
+                            Log.e(TAG, "Permission denied during cleanup", e);
+                        }
+                        bluetoothGatt = null;
+                    }
+
+                    // Wait a moment then retry
+                    mainHandler.postDelayed(() -> connectToDevice(), 1000);
+                } else {
+                    notifyError("Connection failed after " + MAX_CONNECTION_RETRIES + " attempts");
+                }
+            }
+        };
+
+        connectToDevice();
+    }
+
+    private void connectToDevice() {
+        try {
+            Log.d(TAG, "Attempting to connect to device: " + device.getAddress());
+            try {
+                String deviceName = device.getName();
+                Log.d(TAG, "Device name: " + deviceName);
+            } catch (SecurityException e) {
+                Log.d(TAG, "Cannot get device name due to permissions");
+            }
+
+            // Use autoConnect = true for more stable connection
+            bluetoothGatt = device.connectGatt(context, true, gattCallback);
+
+            if (bluetoothGatt == null) {
+                notifyError("Failed to create GATT connection");
+                return;
+            }
+
+            Log.d(TAG, "GATT connection initiated successfully");
+
+            // Start connection timeout
+            mainHandler.postDelayed(connectionTimeoutRunnable, CONNECTION_TIMEOUT);
+
+        } catch (SecurityException e) {
+            Log.e(TAG, "Permission denied when connecting", e);
+            notifyError("Permission denied: " + e.getMessage());
+        } catch (Exception e) {
+            Log.e(TAG, "Error connecting to device", e);
+            notifyError("Connection failed: " + e.getMessage());
+        }
+    }
+
+    private void handleConnectionError(int status) {
+        String errorMessage;
+        switch (status) {
+            case 8: // GATT_INSUF_AUTHORIZATION
+                errorMessage = "Insufficient authorization";
+                break;
+            case 19: // GATT_CONN_TERMINATE_PEER_USER
+                errorMessage = "Connection terminated by peer";
+                break;
+            case 22: // GATT_CONN_TERMINATE_LOCAL_HOST
+                errorMessage = "Connection terminated locally";
+                break;
+            case 34: // GATT_CONN_FAIL_ESTABLISH
+                errorMessage = "Failed to establish connection";
+                break;
+            case 62: // GATT_CONN_TIMEOUT
+                errorMessage = "Connection timeout";
+                break;
+            case 133: // Common Android BLE error
+                errorMessage = "BLE connection error (133) - try moving closer to device";
+                break;
+            default:
+                errorMessage = "Connection failed with status: " + status;
+                break;
+        }
+
+        Log.e(TAG, "Connection error: " + errorMessage);
+
+        if (connectionRetryCount < MAX_CONNECTION_RETRIES) {
+            connectionRetryCount++;
+            Log.d(TAG, "Retrying connection due to error, attempt " + connectionRetryCount);
+            mainHandler.post(() -> callback.onProvisioningProgress(errorMessage + ". Retrying... (" + connectionRetryCount + "/" + MAX_CONNECTION_RETRIES + ")"));
+
+            // Clean up and retry
+            if (bluetoothGatt != null) {
+                try {
+                    bluetoothGatt.close();
+                } catch (SecurityException e) {
+                    Log.e(TAG, "Permission denied during cleanup", e);
+                }
+                bluetoothGatt = null;
+            }
+
+            mainHandler.postDelayed(() -> connectToDevice(), 2000);
+        } else {
+            notifyError(errorMessage + " after " + MAX_CONNECTION_RETRIES + " attempts");
+        }
+    }
+
+    private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+        @Override
+        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            Log.d(TAG, "Connection state changed: status=" + status + ", newState=" + newState);
+
+            // Cancel connection timeout if we get any response
+            if (connectionTimeoutRunnable != null) {
+                mainHandler.removeCallbacks(connectionTimeoutRunnable);
+            }
+
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    isConnected = true;
+                    connectionRetryCount = 0; // Reset retry count on successful connection
+                    Log.d(TAG, "Connected to GATT server successfully");
+
+                    mainHandler.post(() -> {
+                        callback.onConnected();
+                        callback.onProvisioningProgress("Connected! Discovering services...");
+                    });
+
+                    provisioningStep = STEP_DISCOVER_SERVICES;
+
+                    // Discover services with a small delay for stability
+                    mainHandler.postDelayed(() -> {
+                        try {
+                            boolean result = bluetoothGatt.discoverServices();
+                            Log.d(TAG, "Service discovery initiated: " + result);
+                            if (!result) {
+                                notifyError("Failed to start service discovery");
+                            }
+                        } catch (SecurityException e) {
+                            Log.e(TAG, "Permission denied during service discovery", e);
+                            notifyError("Permission denied during service discovery");
+                        }
+                    }, 500);
+                } else {
+                    Log.e(TAG, "Connection completed with error status: " + status);
+                    handleConnectionError(status);
+                }
+
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                isConnected = false;
+                servicesDiscovered = false;
+                Log.d(TAG, "Disconnected from GATT server, status: " + status);
+
+                mainHandler.post(() -> {
+                    callback.onDisconnected();
+                    if (provisioningStep < STEP_COMPLETED) {
+                        if (status == BluetoothGatt.GATT_SUCCESS) {
+                            // Normal disconnection after completion
+                            Log.d(TAG, "Normal disconnection");
+                        } else {
+                            // Unexpected disconnection
+                            String errorMsg = "Device disconnected unexpectedly (status: " + status + ")";
+                            if (connectionRetryCount < MAX_CONNECTION_RETRIES) {
+                                connectionRetryCount++;
+                                Log.d(TAG, "Attempting reconnection, attempt " + connectionRetryCount);
+                                errorMsg += ". Retrying... (" + connectionRetryCount + "/" + MAX_CONNECTION_RETRIES + ")";
+                                callback.onProvisioningProgress(errorMsg);
+
+                                // Clean up and retry
+                                cleanup();
+                                mainHandler.postDelayed(() -> connectToDevice(), 2000);
+                                return;
+                            } else {
+                                callback.onProvisioningFailed(errorMsg);
+                            }
+                        }
+                    }
+                });
+
+                cleanup();
+            }
+        }
+
+        @Override
+        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            Log.d(TAG, "Services discovered: status=" + status);
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                servicesDiscovered = true;
+                findProvisioningCharacteristics();
+            } else {
+                notifyError("Service discovery failed with status: " + status);
+            }
+        }
+
+        @Override
+        public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            Log.d(TAG, "Characteristic read: " + characteristic.getUuid() + ", status=" + status);
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                byte[] data = characteristic.getValue();
+                String response = new String(data, StandardCharsets.UTF_8);
+                Log.d(TAG, "Read response: " + response);
+
+                if (characteristic.getUuid().equals(WIFI_STATUS_CHAR_UUID)) {
+                    handleWiFiStatusResponse(response);
+                }
+            }
+        }
+
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            Log.d(TAG, "Characteristic write: " + characteristic.getUuid() + ", status=" + status);
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                if (characteristic.getUuid().equals(SESSION_CHAR_UUID)) {
+                    Log.d(TAG, "Session started successfully");
+                    mainHandler.post(() -> callback.onProvisioningProgress("Session established. Sending WiFi credentials..."));
+
+                    // Wait a moment then send WiFi config
+                    mainHandler.postDelayed(() -> sendWiFiConfiguration(), 500);
+
+                } else if (characteristic.getUuid().equals(WIFI_CONFIG_CHAR_UUID)) {
+                    Log.d(TAG, "WiFi config sent successfully");
+                    mainHandler.post(() -> callback.onProvisioningProgress("WiFi credentials sent. Checking connection status..."));
+
+                    provisioningStep = STEP_CHECK_STATUS;
+                    // Wait for ESP32 to process and then check status
+                    mainHandler.postDelayed(() -> checkWiFiStatus(), 3000);
+                }
+            } else {
+                notifyError("Write failed for characteristic: " + characteristic.getUuid() + ", status: " + status);
+            }
+        }
+
+        @Override
+        public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
+            Log.d(TAG, "Characteristic changed: " + characteristic.getUuid());
+
+            byte[] data = characteristic.getValue();
+            String notification = new String(data, StandardCharsets.UTF_8);
+            Log.d(TAG, "Notification received: " + notification);
+
+            if (characteristic.getUuid().equals(WIFI_STATUS_CHAR_UUID)) {
+                handleWiFiStatusResponse(notification);
+            }
+        }
+
+        @Override
+        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            Log.d(TAG, "Descriptor write: " + descriptor.getUuid() + ", status=" + status);
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                if (descriptor.getUuid().equals(CLIENT_CHARACTERISTIC_CONFIG)) {
+                    Log.d(TAG, "Notifications enabled successfully");
+
+                    if (provisioningStep == STEP_SETUP_NOTIFICATIONS) {
+                        mainHandler.post(() -> callback.onProvisioningProgress("Starting provisioning session..."));
+                        provisioningStep = STEP_START_SESSION;
+                        mainHandler.postDelayed(() -> startProvisioningSession(), 500);
+                    }
+                }
+            } else {
+                notifyError("Failed to enable notifications, status: " + status);
+            }
+        }
+    };
+
+    private void findProvisioningCharacteristics() {
+        Log.d(TAG, "Looking for provisioning service...");
+
+        BluetoothGattService provisioningService = bluetoothGatt.getService(PROVISIONING_SERVICE_UUID);
+
+        if (provisioningService == null) {
+            Log.e(TAG, "Provisioning service not found");
+            notifyError("Provisioning service not found. Make sure ESP32 is in provisioning mode.");
+            return;
+        }
+
+        Log.d(TAG, "Provisioning service found");
+
+        // Find characteristics
+        wifiConfigChar = provisioningService.getCharacteristic(WIFI_CONFIG_CHAR_UUID);
+        wifiStatusChar = provisioningService.getCharacteristic(WIFI_STATUS_CHAR_UUID);
+        sessionChar = provisioningService.getCharacteristic(SESSION_CHAR_UUID);
+
+        if (wifiConfigChar == null || wifiStatusChar == null) {
+            notifyError("Required provisioning characteristics not found");
+            return;
+        }
+
+        Log.d(TAG, "All required characteristics found");
+
+        mainHandler.post(() -> callback.onProvisioningProgress("Services discovered. Setting up notifications..."));
+
+        provisioningStep = STEP_SETUP_NOTIFICATIONS;
+        setupNotifications();
+    }
+
+    private void setupNotifications() {
+        try {
+            // Enable notifications on WiFi status characteristic
+            boolean result = bluetoothGatt.setCharacteristicNotification(wifiStatusChar, true);
+            Log.d(TAG, "Set notification result: " + result);
+
+            if (result) {
+                BluetoothGattDescriptor descriptor = wifiStatusChar.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG);
+                if (descriptor != null) {
+                    descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+                    bluetoothGatt.writeDescriptor(descriptor);
+                } else {
+                    notifyError("Notification descriptor not found");
+                }
+            } else {
+                notifyError("Failed to enable notifications");
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "Permission denied during notification setup", e);
+            notifyError("Permission denied during notification setup");
+        }
+    }
+
+    private void startProvisioningSession() {
+        if (sessionChar == null) {
+            // Skip session start if not available
+            mainHandler.post(() -> callback.onProvisioningProgress("Sending WiFi credentials..."));
+            sendWiFiConfiguration();
+            return;
+        }
+
+        try {
+            // Send session start command
+            String sessionCommand = "{\"cmd\":\"start_session\"}";
+            sessionChar.setValue(sessionCommand.getBytes(StandardCharsets.UTF_8));
+
+            boolean result = bluetoothGatt.writeCharacteristic(sessionChar);
+            Log.d(TAG, "Session start write result: " + result);
+
+            if (!result) {
+                notifyError("Failed to start provisioning session");
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "Permission denied during session start", e);
+            notifyError("Permission denied during session start");
+        }
+    }
+
+    private void sendWiFiConfiguration() {
+        try {
+            // Create WiFi configuration JSON
+            JSONObject wifiConfig = new JSONObject();
+            wifiConfig.put("ssid", ssid);
+            wifiConfig.put("password", password);
+
+            String configJson = wifiConfig.toString();
+            Log.d(TAG, "Sending WiFi config: " + configJson);
+
+            wifiConfigChar.setValue(configJson.getBytes(StandardCharsets.UTF_8));
+
+            boolean result = bluetoothGatt.writeCharacteristic(wifiConfigChar);
+            Log.d(TAG, "WiFi config write result: " + result);
+
+            if (!result) {
+                notifyError("Failed to send WiFi configuration");
+            } else {
+                // Set up a timeout to automatically complete provisioning if we don't get proper status
+                mainHandler.postDelayed(() -> {
+                    if (provisioningStep < STEP_COMPLETED) {
+                        Log.w(TAG, "Provisioning timeout - assuming success and completing");
+                        mainHandler.post(() -> {
+                            callback.onProvisioningProgress("Timeout reached - assuming WiFi connected successfully!");
+                            provisioningStep = STEP_COMPLETED;
+                            callback.onProvisioningSuccess();
+                            disconnect();
+                        });
+                    }
+                }, 15000); // 15 second timeout
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "Permission denied during WiFi config send", e);
+            notifyError("Permission denied during WiFi config send");
+        } catch (Exception e) {
+            Log.e(TAG, "Error creating WiFi config", e);
+            notifyError("Error creating WiFi configuration: " + e.getMessage());
+        }
+    }
+
+    private void checkWiFiStatus() {
+        try {
+            if (bluetoothGatt == null) {
+                Log.w(TAG, "Cannot check WiFi status - GATT connection is null");
+                return;
+            }
+
+            if (wifiStatusChar == null) {
+                Log.w(TAG, "Cannot check WiFi status - characteristic is null");
+                return;
+            }
+
+            Log.d(TAG, "Checking WiFi status...");
+            boolean result = bluetoothGatt.readCharacteristic(wifiStatusChar);
+            Log.d(TAG, "WiFi status read result: " + result);
+
+            if (!result) {
+                Log.e(TAG, "Failed to read WiFi status characteristic");
+                // Don't call notifyError here as it might be normal disconnection
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "Permission denied during status check", e);
+        } catch (Exception e) {
+            Log.e(TAG, "Error during WiFi status check", e);
+        }
+    }
+
+    private void handleWiFiStatusResponse(String response) {
+        Log.d(TAG, "WiFi status response: '" + response + "' (length: " + response.length() + ")");
+
+        // Check for truncated messages but try to extract meaningful info
+        boolean isTruncated = response.length() < 10 || !response.contains("}");
+
+        if (isTruncated) {
+            Log.w(TAG, "Received truncated JSON response: '" + response + "'");
+
+            // Try to extract status from truncated message
+            String lowerResponse = response.toLowerCase();
+
+            mainHandler.post(() -> {
+                if (lowerResponse.contains("\"status\":\"connect")) {
+                    Log.d(TAG, "Detected 'connected' in truncated message - assuming success");
+                    callback.onProvisioningProgress("WiFi connected successfully!");
+                    provisioningStep = STEP_COMPLETED;
+                    callback.onProvisioningSuccess();
+                    disconnect();
+                    return;
+                } else if (lowerResponse.contains("\"status\":\"monitorin")) {
+                    Log.d(TAG, "Detected 'monitoring' in truncated message - device is working, assuming success");
+                    callback.onProvisioningProgress("Device is monitoring - provisioning complete!");
+                    provisioningStep = STEP_COMPLETED;
+                    callback.onProvisioningSuccess();
+                    disconnect();
+                    return;
+                } else if (lowerResponse.contains("\"status\":\"ready")) {
+                    callback.onProvisioningProgress("ESP32 ready...");
+                } else {
+                    Log.w(TAG, "Ignoring unrecognized truncated message");
+                }
+            });
+            return;
+        }
+
+        try {
+            JSONObject statusJson = new JSONObject(response);
+            String status = statusJson.optString("status", "unknown");
+            String message = statusJson.optString("message", "");
+
+            Log.d(TAG, "Parsed status: '" + status + "', message: '" + message + "'");
+
+            mainHandler.post(() -> {
+                switch (status.toLowerCase()) {
+                    case "connected":
+                    case "success":
+                        callback.onProvisioningProgress("WiFi connected successfully!");
+                        provisioningStep = STEP_COMPLETED;
+                        callback.onProvisioningSuccess();
+                        disconnect();
+                        break;
+
+                    case "connecting":
+                        callback.onProvisioningProgress("ESP32 connecting to WiFi...");
+                        // Check status again after a delay
+                        mainHandler.postDelayed(() -> checkWiFiStatus(), 3000);
+                        break;
+
+                    case "monitoring":
+                        // Device is in monitoring mode = provisioning was successful
+                        callback.onProvisioningProgress("Device is monitoring - provisioning complete!");
+                        provisioningStep = STEP_COMPLETED;
+                        callback.onProvisioningSuccess();
+                        disconnect();
+                        break;
+
+                    case "failed":
+                    case "error":
+                        callback.onProvisioningFailed("WiFi connection failed: " + message);
+                        disconnect();
+                        break;
+
+                    case "ready":
+                        callback.onProvisioningProgress("ESP32 ready: " + message);
+                        break;
+
+                    default:
+                        callback.onProvisioningProgress("Status: " + status);
+                        // Continue checking if we're still in provisioning
+                        if (provisioningStep < STEP_COMPLETED) {
+                            mainHandler.postDelayed(() -> checkWiFiStatus(), 2000);
+                        }
+                        break;
+                }
+            });
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error parsing status response: '" + response + "'", e);
+
+            // Fallback: try to parse without JSON for simple cases
+            mainHandler.post(() -> {
+                String lowerResponse = response.toLowerCase();
+                if (lowerResponse.contains("connected") || lowerResponse.contains("success")) {
+                    Log.d(TAG, "Fallback: Detected success in response");
+                    callback.onProvisioningSuccess();
+                    provisioningStep = STEP_COMPLETED;
+                    disconnect();
+                } else if (lowerResponse.contains("connecting")) {
+                    Log.d(TAG, "Fallback: Detected connecting in response");
+                    callback.onProvisioningProgress("ESP32 connecting to WiFi...");
+                    mainHandler.postDelayed(() -> checkWiFiStatus(), 3000);
+                } else if (lowerResponse.contains("monitoring")) {
+                    Log.d(TAG, "Fallback: Detected monitoring in response - assuming success");
+                    callback.onProvisioningSuccess();
+                    provisioningStep = STEP_COMPLETED;
+                    disconnect();
+                } else {
+                    Log.d(TAG, "Fallback: Unknown response, continuing monitoring");
+                    callback.onProvisioningProgress("Received: " + response);
+                }
+            });
+        }
+    }
+
+    private void notifyError(String error) {
+        Log.e(TAG, "Provisioning error: " + error);
+        mainHandler.post(() -> callback.onError(error));
+        disconnect();
+    }
+
+    public void disconnect() {
+        Log.d(TAG, "Disconnecting from device");
+
+        // Cancel any pending operations
+        if (connectionTimeoutRunnable != null) {
+            mainHandler.removeCallbacks(connectionTimeoutRunnable);
+        }
+
+        if (bluetoothGatt != null) {
+            try {
+                bluetoothGatt.disconnect();
+            } catch (SecurityException e) {
+                Log.e(TAG, "Permission denied during disconnect", e);
+            } catch (Exception e) {
+                Log.e(TAG, "Error during disconnect", e);
+            }
+        }
+    }
+
+    private void cleanup() {
+        // Cancel any pending timeouts or callbacks
+        if (connectionTimeoutRunnable != null) {
+            mainHandler.removeCallbacks(connectionTimeoutRunnable);
+            connectionTimeoutRunnable = null;
+        }
+
+        // Remove any pending checkWiFiStatus calls
+        mainHandler.removeCallbacksAndMessages(null);
+
+        if (bluetoothGatt != null) {
+            try {
+                bluetoothGatt.close();
+            } catch (SecurityException e) {
+                Log.e(TAG, "Permission denied during cleanup", e);
+            } catch (Exception e) {
+                Log.e(TAG, "Error during cleanup", e);
+            }
+            bluetoothGatt = null;
+        }
+
+        wifiConfigChar = null;
+        wifiStatusChar = null;
+        sessionChar = null;
+        isConnected = false;
+        servicesDiscovered = false;
+    }
+
+    public boolean isConnected() {
+        return isConnected && servicesDiscovered;
+    }
+}

@@ -1,0 +1,218 @@
+package com.example.smartworks.auth;
+
+import android.os.Bundle;
+import android.text.TextUtils;
+import android.util.Log;
+import android.util.Patterns;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ProgressBar;
+import android.widget.Toast;
+import androidx.appcompat.app.AppCompatActivity;
+import com.example.smartworks.R;
+
+/**
+ * Registration Activity for SmartWorks App
+ */
+public class RegisterActivity extends AppCompatActivity {
+    private static final String TAG = "RegisterActivity";
+
+    private EditText etUsername;
+    private EditText etEmail;
+    private EditText etPassword;
+    private EditText etConfirmPassword;
+    private Button btnRegister;
+    private Button btnBackToLogin;
+    private ProgressBar progressBar;
+
+    private AuthenticationManager authManager;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_register);
+
+        authManager = AuthenticationManager.getInstance(this);
+
+        initializeViews();
+        setupListeners();
+    }
+
+    private void initializeViews() {
+        etUsername = findViewById(R.id.etUsername);
+        etEmail = findViewById(R.id.etEmail);
+        etPassword = findViewById(R.id.etPassword);
+        etConfirmPassword = findViewById(R.id.etConfirmPassword);
+        btnRegister = findViewById(R.id.btnRegister);
+        btnBackToLogin = findViewById(R.id.btnBackToLogin);
+        progressBar = findViewById(R.id.progressBar);
+
+        // Set up action bar
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().setTitle("Create Account");
+            getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        }
+    }
+
+    private void setupListeners() {
+        btnRegister.setOnClickListener(v -> performRegistration());
+        btnBackToLogin.setOnClickListener(v -> finish());
+
+        // Handle enter key in confirm password field
+        etConfirmPassword.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                performRegistration();
+                return true;
+            }
+            return false;
+        });
+    }
+
+    private void performRegistration() {
+        // Clear previous errors
+        etUsername.setError(null);
+        etEmail.setError(null);
+        etPassword.setError(null);
+        etConfirmPassword.setError(null);
+
+        String username = etUsername.getText().toString().trim();
+        String email = etEmail.getText().toString().trim();
+        String password = etPassword.getText().toString().trim();
+        String confirmPassword = etConfirmPassword.getText().toString().trim();
+
+        // Validate inputs
+        if (TextUtils.isEmpty(username)) {
+            etUsername.setError("Username is required");
+            etUsername.requestFocus();
+            return;
+        }
+
+        if (username.length() < 3) {
+            etUsername.setError("Username must be at least 3 characters");
+            etUsername.requestFocus();
+            return;
+        }
+
+        if (TextUtils.isEmpty(email)) {
+            etEmail.setError("Email is required");
+            etEmail.requestFocus();
+            return;
+        }
+
+        if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            etEmail.setError("Please enter a valid email address");
+            etEmail.requestFocus();
+            return;
+        }
+
+        if (TextUtils.isEmpty(password)) {
+            etPassword.setError("Password is required");
+            etPassword.requestFocus();
+            return;
+        }
+
+        if (password.length() < 8) {
+            etPassword.setError("Password must be at least 8 characters");
+            etPassword.requestFocus();
+            return;
+        }
+
+        // Check password strength
+        if (!isPasswordStrong(password)) {
+            etPassword.setError("Password must contain uppercase, lowercase, number, and special character");
+            etPassword.requestFocus();
+            return;
+        }
+
+        if (TextUtils.isEmpty(confirmPassword)) {
+            etConfirmPassword.setError("Please confirm your password");
+            etConfirmPassword.requestFocus();
+            return;
+        }
+
+        if (!password.equals(confirmPassword)) {
+            etConfirmPassword.setError("Passwords do not match");
+            etConfirmPassword.requestFocus();
+            return;
+        }
+
+        showProgress(true);
+
+        authManager.register(username, email, password)
+                .thenAccept(result -> runOnUiThread(() -> {
+                    showProgress(false);
+
+                    if (result.success) {
+                        showRegistrationSuccessDialog();
+                    } else {
+                        handleRegistrationError(result.message);
+                    }
+                }))
+                .exceptionally(throwable -> {
+                    runOnUiThread(() -> {
+                        showProgress(false);
+                        Log.e(TAG, "Registration failed", throwable);
+                        Toast.makeText(this, "Registration failed: " + throwable.getMessage(), Toast.LENGTH_LONG).show();
+                    });
+                    return null;
+                });
+    }
+
+    private boolean isPasswordStrong(String password) {
+        // Check for at least one uppercase, lowercase, number, and special character
+        boolean hasUppercase = password.matches(".*[A-Z].*");
+        boolean hasLowercase = password.matches(".*[a-z].*");
+        boolean hasNumber = password.matches(".*[0-9].*");
+        boolean hasSpecial = password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>\\/?].*");
+
+        return hasUppercase && hasLowercase && hasNumber && hasSpecial;
+    }
+
+    private void handleRegistrationError(String errorMessage) {
+        if (errorMessage.toLowerCase().contains("username") && errorMessage.toLowerCase().contains("exists")) {
+            etUsername.setError("Username already exists");
+            etUsername.requestFocus();
+        } else if (errorMessage.toLowerCase().contains("email") && errorMessage.toLowerCase().contains("exists")) {
+            etEmail.setError("Email already registered");
+            etEmail.requestFocus();
+        } else {
+            Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showRegistrationSuccessDialog() {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Registration Successful!")
+                .setMessage("Your account has been created successfully. You can now login with your credentials.")
+                .setPositiveButton("Login Now", (dialog, which) -> finish())
+                .setCancelable(false)
+                .show();
+    }
+
+    private void showProgress(boolean show) {
+        if (show) {
+            progressBar.setVisibility(View.VISIBLE);
+            btnRegister.setEnabled(false);
+            btnBackToLogin.setEnabled(false);
+            etUsername.setEnabled(false);
+            etEmail.setEnabled(false);
+            etPassword.setEnabled(false);
+            etConfirmPassword.setEnabled(false);
+        } else {
+            progressBar.setVisibility(View.GONE);
+            btnRegister.setEnabled(true);
+            btnBackToLogin.setEnabled(true);
+            etUsername.setEnabled(true);
+            etEmail.setEnabled(true);
+            etPassword.setEnabled(true);
+            etConfirmPassword.setEnabled(true);
+        }
+    }
+
+    @Override
+    public boolean onSupportNavigateUp() {
+        finish();
+        return true;
+    }
+}

@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/white">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- Current Network Section -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Current WiFi Network"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="#333333"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/currentSSIDText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Current: Loading..."
+        android:textSize="14sp"
+        android:textColor="@android:color/darker_gray"
+        android:layout_marginBottom="24dp"
+        android:padding="12dp"
+        android:background="#F5F5F5" />
+
+    <!-- Available Networks Section -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+        
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Available 2.4GHz Networks"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#333333" />
+            
+        <Button
+            android:id="@+id/refreshNetworksButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:text="🔄 Refresh"
+            android:textSize="12sp"
+            android:background="@android:color/holo_blue_light"
+            android:textColor="@android:color/white"
+            android:padding="8dp" />
+    </LinearLayout>
+
+    <!-- Scanning Progress -->
+    <TextView
+        android:id="@+id/scanningText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="🔍 Scanning for networks..."
+        android:textSize="14sp"
+        android:textColor="@android:color/holo_blue_dark"
+        android:layout_marginBottom="16dp"
+        android:padding="8dp"
+        android:background="#E3F2FD"
+        android:visibility="visible" />
+
+    <!-- Network List -->
+    <RadioGroup
+        android:id="@+id/networksRadioGroup"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Manual Entry Option -->
+    <RadioButton
+        android:id="@+id/manualEntryRadio"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="📝 Enter network name manually"
+        android:textSize="14sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="8dp" />
+        
+    <!-- Manual SSID Entry -->
+    <EditText
+        android:id="@+id/manualSSIDEdit"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:hint="Enter network name (SSID)"
+        android:inputType="text"
+        android:layout_marginBottom="16dp"
+        android:background="@android:drawable/edit_text"
+        android:textColor="#333333"
+        android:textColorHint="#999999"
+        android:padding="12dp"
+        android:visibility="gone" />
+
+    <!-- Password Section -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Network Password:"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:textColor="#333333"
+        android:layout_marginBottom="4dp" />
+
+    <EditText
+        android:id="@+id/passwordEdit"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:hint="Enter network password (leave empty for open networks)"
+        android:inputType="textPassword"
+        android:layout_marginBottom="16dp"
+        android:background="@android:drawable/edit_text"
+        android:textColor="#333333"
+        android:textColorHint="#999999"
+        android:padding="12dp" />
+        
+    <!-- Show/Hide Password Toggle -->
+    <CheckBox
+        android:id="@+id/showPasswordCheckbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Show password"
+        android:textSize="12sp"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Instructions -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="⚠️ Important: After applying new WiFi settings, the device will restart and may take a few minutes to reconnect. The device IP address may change."
+        android:textSize="12sp"
+        android:textColor="@android:color/holo_orange_dark"
+        android:layout_marginBottom="24dp"
+        android:padding="8dp"
+        android:background="#FFF3E0" />
+
+    <!-- Apply Button -->
+    <Button
+        android:id="@+id/applySettingsButton"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="Apply WiFi Settings"
+        android:background="@android:color/holo_green_light"
+        android:textColor="@android:color/white"
+        android:textStyle="bold"
+        android:enabled="false" />
+
+</LinearLayout>
+</ScrollView>

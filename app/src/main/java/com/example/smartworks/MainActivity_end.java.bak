@@ -1,0 +1,35 @@
+            } catch (Exception e) {
+                Log.e(TAG, "Manual IP test failed: " + e.getMessage());
+            }
+
+            final boolean finalSuccess = success;
+            runOnUiThread(() -> {
+                if (finalSuccess) {
+                    Toast.makeText(MainActivity.this, "IP address verified! Fetching device data...", Toast.LENGTH_SHORT).show();
+                    if (devicesAdapter != null) {
+                        devicesAdapter.notifyDataSetChanged();
+                    }
+                } else {
+                    Toast.makeText(MainActivity.this, "Could not connect to " + ipAddress + ". Please check the IP address and device status.", Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void showProgress(boolean show) {
+        if (swipeRefreshLayout != null) {
+            swipeRefreshLayout.setRefreshing(show);
+        }
+    }
+
+    // AuthStateListener implementation
+    @Override
+    public void onAuthStateChanged(boolean isLoggedIn, AuthenticationManager.User user) {
+        if (!isLoggedIn) {
+            redirectToLogin();
+        } else {
+            setupActionBar();
+            loadDevicesFromAPI();
+        }
+    }
+}

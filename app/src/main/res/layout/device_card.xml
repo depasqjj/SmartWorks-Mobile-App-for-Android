@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="8dp"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="4dp"
+    android:foreground="?android:attr/selectableItemBackground">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Top row with device info and remove button -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <!-- Device Icon -->
+            <ImageView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@android:drawable/ic_dialog_info"
+                android:layout_marginEnd="16dp"
+                android:tint="@android:color/holo_blue_dark" />
+
+            <!-- Device Information -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <!-- Device Name (NO ICON) -->
+                <TextView
+                    android:id="@+id/deviceName"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="@android:color/black" />
+
+                <!-- Router Info (NO ICON) -->
+                <TextView
+                    android:id="@+id/routerInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="12sp"
+                    android:textColor="@android:color/darker_gray"
+                    android:layout_marginTop="2dp" />
+
+                <!-- Temperature -->
+                <TextView
+                    android:id="@+id/temperature"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="@android:color/holo_orange_dark"
+                    android:layout_marginTop="4dp"
+                    android:textStyle="bold" />
+
+            </LinearLayout>
+
+            <!-- Status and Remove Button Column -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <!-- Signal Strength Bars -->
+                <LinearLayout
+                    android:id="@+id/signalBars"
+                    android:layout_width="wrap_content"
+                    android:layout_height="16dp"
+                    android:orientation="horizontal"
+                    android:gravity="bottom"
+                    android:layout_marginBottom="4dp">
+
+                    <!-- Bar 1 (always visible when connected) -->
+                    <View
+                        android:id="@+id/signalBar1"
+                        android:layout_width="3dp"
+                        android:layout_height="4dp"
+                        android:layout_marginEnd="1dp"
+                        android:background="@android:color/darker_gray" />
+
+                    <!-- Bar 2 -->
+                    <View
+                        android:id="@+id/signalBar2"
+                        android:layout_width="3dp"
+                        android:layout_height="7dp"
+                        android:layout_marginEnd="1dp"
+                        android:background="@android:color/darker_gray" />
+
+                    <!-- Bar 3 -->
+                    <View
+                        android:id="@+id/signalBar3"
+                        android:layout_width="3dp"
+                        android:layout_height="10dp"
+                        android:layout_marginEnd="1dp"
+                        android:background="@android:color/darker_gray" />
+
+                    <!-- Bar 4 -->
+                    <View
+                        android:id="@+id/signalBar4"
+                        android:layout_width="3dp"
+                        android:layout_height="13dp"
+                        android:layout_marginEnd="1dp"
+                        android:background="@android:color/darker_gray" />
+
+                    <!-- Bar 5 (full signal) -->
+                    <View
+                        android:id="@+id/signalBar5"
+                        android:layout_width="3dp"
+                        android:layout_height="16dp"
+                        android:background="@android:color/darker_gray" />
+
+                </LinearLayout>
+
+                <!-- Status Text -->
+                <TextView
+                    android:id="@+id/statusText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="10sp"
+                    android:textColor="@android:color/darker_gray" />
+
+                <!-- Config Button (Gear Icon) -->
+                <ImageButton
+                    android:id="@+id/configButton"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@drawable/ic_settings_gear"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/config_button_background"
+                    android:scaleType="fitCenter"
+                    android:padding="8dp"
+                    android:contentDescription="Configure device settings"
+                    style="?android:attr/buttonStyleSmall" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Additional Info Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="12dp">
+
+            <!-- Temperature Status -->
+            <TextView
+                android:id="@+id/temperatureStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="10sp"
+                android:textColor="@android:color/darker_gray" />
+
+            <!-- IP Address -->
+            <TextView
+                android:id="@+id/ipAddress"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="10sp"
+                android:textColor="@android:color/darker_gray" />
+
+        </LinearLayout>
+
+        <!-- Bottom Info Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <!-- Empty space where signal was (keeping layout balanced) -->
+            <View
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+
+            <!-- Empty space where last update was -->
+            <View
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+
+        </LinearLayout>
+
+        <!-- Status (if needed as separate field) -->
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="10sp"
+            android:textColor="@android:color/darker_gray"
+            android:layout_marginTop="4dp"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+</androidx.cardview.widget.CardView>

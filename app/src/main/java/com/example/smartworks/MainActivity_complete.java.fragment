@@ -1,0 +1,251 @@
+// Complete MainActivity.java content - part 2
+            String deviceInfo = deviceName;
+            if (deviceAddress != null && !deviceAddress.trim().isEmpty()) {
+                deviceInfo += "\n" + deviceAddress;
+            }
+            if (wifiSSID != null && !wifiSSID.trim().isEmpty()) {
+                deviceInfo += "\nRouter: " + wifiSSID;
+            }
+            deviceInfo += "\nTemperature: Loading...";
+            deviceInfo += "\nStatus: Online";
+
+            deviceSet.removeIf(existing -> existing.startsWith(deviceName + "\n") || existing.equals(deviceName));
+            deviceSet.add(deviceInfo);
+
+            editor.putStringSet("provisioned_devices", deviceSet);
+            editor.apply();
+
+            // Add to current list
+            DeviceAdapter.DeviceInfo newDevice = new DeviceAdapter.DeviceInfo(deviceName, deviceAddress, wifiSSID);
+            provisionedDevices.add(newDevice);
+            
+            if (devicesAdapter != null) {
+                devicesAdapter.notifyDataSetChanged();
+            }
+            updateEmptyState();
+
+            Toast.makeText(this, "Device saved locally", Toast.LENGTH_SHORT).show();
+            Log.d(TAG, "Device saved to local storage as fallback");
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error saving device locally", e);
+            Toast.makeText(this, "Error saving device", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleDeviceConfigResult(Intent data) {
+        // Handle device configuration changes
+        if (data.getBooleanExtra("device_deleted", false)) {
+            // Device was deleted, reload from API
+            loadDevicesFromAPI();
+            Toast.makeText(this, "Device deleted successfully", Toast.LENGTH_SHORT).show();
+        } else if (data.hasExtra("updated_device_name")) {
+            // Device was updated, reload from API
+            loadDevicesFromAPI();
+            Toast.makeText(this, "Device updated successfully", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showDeviceManagementDialog(DeviceAdapter.DeviceInfo device, int position) {
+        androidx.appcompat.app.AlertDialog.Builder builder = new androidx.appcompat.app.AlertDialog.Builder(this);
+        builder.setTitle("Manage Device: " + device.name);
+        builder.setMessage("What would you like to do with this device?");
+
+        builder.setPositiveButton("Configure IP", (dialog, which) -> {
+            showManualIPDialog(device, position);
+        });
+
+        builder.setNegativeButton("Delete Device", (dialog, which) -> {
+            deleteDeviceConfirmation(device, position);
+        });
+
+        builder.setNeutralButton("Send Command", (dialog, which) -> {
+            showCommandDialog(device);
+        });
+
+        builder.show();
+    }
+
+    private void deleteDeviceConfirmation(DeviceAdapter.DeviceInfo device, int position) {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Delete Device")
+                .setMessage("Are you sure you want to delete \"" + device.name + "\"?\n\nThis will remove it from your account.")
+                .setPositiveButton("Delete", (dialog, which) -> {
+                    deleteDeviceViaAPI(device, position);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void deleteDeviceViaAPI(DeviceAdapter.DeviceInfo device, int position) {
+        // For now, we'll use local deletion as we need the device ID from API
+        // In a full implementation, you'd track the API device ID
+        try {
+            provisionedDevices.remove(position);
+            if (devicesAdapter != null) {
+                devicesAdapter.notifyDataSetChanged();
+            }
+            updateEmptyState();
+            
+            // Remove from local storage too
+            removeDeviceFromLocalStorage(device);
+            
+            Toast.makeText(this, "Device \"" + device.name + "\" deleted successfully", Toast.LENGTH_SHORT).show();
+            Log.d(TAG, "Device deleted: " + device.name);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error deleting device", e);
+            Toast.makeText(this, "Error deleting device: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void removeDeviceFromLocalStorage(DeviceAdapter.DeviceInfo device) {
+        try {
+            SharedPreferences prefs = getSharedPreferences("SmartWorks", Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = prefs.edit();
+            
+            Set<String> deviceSet = new HashSet<>(prefs.getStringSet("provisioned_devices", new HashSet<>()));
+            deviceSet.removeIf(deviceString -> deviceString.startsWith(device.name + "\n") || deviceString.equals(device.name));
+            
+            editor.putStringSet("provisioned_devices", deviceSet);
+            editor.apply();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error removing device from local storage", e);
+        }
+    }
+
+    private void showCommandDialog(DeviceAdapter.DeviceInfo device) {
+        String[] commands = {"Turn On", "Turn Off", "Get Status", "Reset"};
+        
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Send Command to " + device.name)
+                .setItems(commands, (dialog, which) -> {
+                    String command;
+                    switch (which) {
+                        case 0: command = "turn_on"; break;
+                        case 1: command = "turn_off"; break;
+                        case 2: command = "get_status"; break;
+                        case 3: command = "reset"; break;
+                        default: return;
+                    }
+                    
+                    sendCommandToDevice(device, command);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void sendCommandToDevice(DeviceAdapter.DeviceInfo device, String command) {
+        showProgress(true);
+        
+        apiService.sendDeviceCommand(device.address, command)
+            .thenAccept(result -> runOnUiThread(() -> {
+                showProgress(false);
+                
+                if (result.success) {
+                    Toast.makeText(this, "Command sent successfully", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "Failed to send command: " + result.message, Toast.LENGTH_LONG).show();
+                }
+            }))
+            .exceptionally(throwable -> {
+                runOnUiThread(() -> {
+                    showProgress(false);
+                    Log.e(TAG, "Send command error", throwable);
+                    Toast.makeText(this, "Network error sending command", Toast.LENGTH_SHORT).show());
+                });
+                return null;
+            });
+    }
+
+    private void showManualIPDialog(DeviceAdapter.DeviceInfo device, int position) {
+        androidx.appcompat.app.AlertDialog.Builder builder = new androidx.appcompat.app.AlertDialog.Builder(this);
+        builder.setTitle("Connect to " + device.name);
+        builder.setMessage("Enter the IP address of your device:");
+
+        final android.widget.EditText ipInput = new android.widget.EditText(this);
+        ipInput.setHint("192.168.1.100");
+        ipInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setPadding(50, 40, 50, 10);
+        layout.addView(ipInput);
+        builder.setView(layout);
+
+        builder.setPositiveButton("Test & Connect", (dialog, which) -> {
+            String ipAddress = ipInput.getText().toString().trim();
+            if (!ipAddress.isEmpty()) {
+                testAndSetIP(ipAddress, device, position);
+            } else {
+                Toast.makeText(this, "Please enter an IP address", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        builder.setNegativeButton("Cancel", null);
+        builder.show();
+    }
+
+    private void testAndSetIP(String ipAddress, DeviceAdapter.DeviceInfo device, int position) {
+        executorService.execute(() -> {
+            boolean success = false;
+            try {
+                java.net.URL url = new java.net.URL("http://" + ipAddress + "/data");
+                java.net.HttpURLConnection connection = (java.net.HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setRequestMethod("GET");
+                int responseCode = connection.getResponseCode();
+                connection.disconnect();
+
+                if (responseCode == 200) {
+                    success = true;
+                    device.ipAddress = ipAddress;
+                    device.status = "Manual IP Set";
+                    device.temperature = "Loading...";
+
+                    try {
+                        if (devicesAdapter != null) {
+                            devicesAdapter.updateStoredDeviceIP(device, ipAddress);
+                            devicesAdapter.fetchDeviceData(device, position);
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "DeviceAdapter methods not available", e);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Manual IP test failed: " + e.getMessage());
+            }
+
+            final boolean finalSuccess = success;
+            runOnUiThread(() -> {
+                if (finalSuccess) {
+                    Toast.makeText(MainActivity.this, "IP address verified! Fetching device data...", Toast.LENGTH_SHORT).show();
+                    if (devicesAdapter != null) {
+                        devicesAdapter.notifyDataSetChanged();
+                    }
+                } else {
+                    Toast.makeText(MainActivity.this, "Could not connect to " + ipAddress + ". Please check the IP address and device status.", Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void showProgress(boolean show) {
+        if (swipeRefreshLayout != null) {
+            swipeRefreshLayout.setRefreshing(show);
+        }
+    }
+
+    // AuthStateListener implementation
+    @Override
+    public void onAuthStateChanged(boolean isLoggedIn, AuthenticationManager.User user) {
+        if (!isLoggedIn) {
+            redirectToLogin();
+        } else {
+            setupActionBar();
+            loadDevicesFromAPI();
+        }
+    }
+}

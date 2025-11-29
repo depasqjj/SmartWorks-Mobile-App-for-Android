@@ -1,0 +1,459 @@
+package com.example.smartworks.auth;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import androidx.security.crypto.EncryptedSharedPreferences;
+import androidx.security.crypto.MasterKey;
+import com.google.gson.Gson;
+import com.google.gson.annotations.SerializedName;
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import okhttp3.*;
+
+/**
+ * AuthenticationManager handles all authentication operations for the SmartWorks app.
+ * Integrates with your existing PHP authentication system.
+ */
+public class AuthenticationManager {
+    private static final String TAG = "AuthManager";
+    private static final String PREFS_NAME = "smartworks_auth";
+    private static final String BASE_URL = "https://your-domain.com/server/"; // Update with your server URL
+
+    // Preference keys
+    private static final String KEY_USER_ID = "user_id";
+    private static final String KEY_USERNAME = "username";
+    private static final String KEY_EMAIL = "email";
+    private static final String KEY_API_KEY = "api_key";
+    private static final String KEY_ROLE = "role";
+    private static final String KEY_IS_LOGGED_IN = "is_logged_in";
+
+    private static AuthenticationManager instance;
+    private final Context context;
+    private final OkHttpClient httpClient;
+    private final Gson gson;
+    private final ExecutorService executorService;
+    private SharedPreferences securePrefs;
+
+    // User data
+    private User currentUser;
+
+    private AuthenticationManager(Context context) {
+        this.context = context.getApplicationContext();
+        this.gson = new Gson();
+        this.executorService = Executors.newCachedThreadPool();
+
+        // Initialize OkHttp with timeouts
+        this.httpClient = new OkHttpClient.Builder()
+                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+
+        initializeSecurePrefs();
+        loadUserData();
+    }
+
+    public static synchronized AuthenticationManager getInstance(Context context) {
+        if (instance == null) {
+            instance = new AuthenticationManager(context);
+        }
+        return instance;
+    }
+
+    private void initializeSecurePrefs() {
+        try {
+            MasterKey masterKey = new MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build();
+
+            securePrefs = EncryptedSharedPreferences.create(
+                    context,
+                    PREFS_NAME,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            );
+        } catch (GeneralSecurityException | IOException e) {
+            Log.e(TAG, "Failed to create encrypted preferences, falling back to regular", e);
+            securePrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        }
+    }
+
+    private void loadUserData() {
+        if (securePrefs.getBoolean(KEY_IS_LOGGED_IN, false)) {
+            currentUser = new User();
+            currentUser.id = securePrefs.getInt(KEY_USER_ID, 0);
+            currentUser.username = securePrefs.getString(KEY_USERNAME, "");
+            currentUser.email = securePrefs.getString(KEY_EMAIL, "");
+            currentUser.apiKey = securePrefs.getString(KEY_API_KEY, "");
+            currentUser.role = securePrefs.getString(KEY_ROLE, "user");
+        }
+    }
+
+    private void saveUserData(User user) {
+        SharedPreferences.Editor editor = securePrefs.edit();
+        editor.putBoolean(KEY_IS_LOGGED_IN, true);
+        editor.putInt(KEY_USER_ID, user.id);
+        editor.putString(KEY_USERNAME, user.username);
+        editor.putString(KEY_EMAIL, user.email);
+        editor.putString(KEY_API_KEY, user.apiKey);
+        editor.putString(KEY_ROLE, user.role);
+        editor.apply();
+
+        this.currentUser = user;
+    }
+
+    private void clearUserData() {
+        SharedPreferences.Editor editor = securePrefs.edit();
+        editor.clear();
+        editor.apply();
+        this.currentUser = null;
+    }
+
+    /**
+     * Login with username and password
+     */
+    public CompletableFuture<AuthResult> login(String username, String password) {
+        CompletableFuture<AuthResult> future = new CompletableFuture<>();
+
+        executorService.execute(() -> {
+            try {
+                LoginRequest request = new LoginRequest(username, password);
+                RequestBody body = RequestBody.create(
+                        gson.toJson(request),
+                        MediaType.get("application/json")
+                );
+
+                Request httpRequest = new Request.Builder()
+                        .url(BASE_URL + "login.php")
+                        .post(body)
+                        .header("Content-Type", "application/json")
+                        .build();
+
+                Response response = httpClient.newCall(httpRequest).execute();
+                String responseBody = response.body().string();
+
+                if (response.isSuccessful()) {
+                    LoginResponse loginResponse = gson.fromJson(responseBody, LoginResponse.class);
+
+                    if ("ok".equals(loginResponse.status)) {
+                        User user = new User();
+                        user.id = loginResponse.userId;
+                        user.username = username;
+                        user.email = loginResponse.email != null ? loginResponse.email : username;
+                        user.apiKey = loginResponse.apiKey;
+                        user.role = loginResponse.role != null ? loginResponse.role : "user";
+
+                        saveUserData(user);
+                        future.complete(AuthResult.success("Login successful", user));
+                    } else {
+                        future.complete(AuthResult.error(loginResponse.message));
+                    }
+                } else {
+                    ErrorResponse errorResponse = gson.fromJson(responseBody, ErrorResponse.class);
+                    String errorMessage = errorResponse != null ? errorResponse.message : "Login failed";
+                    future.complete(AuthResult.error(errorMessage));
+                }
+
+            } catch (Exception e) {
+                Log.e(TAG, "Login error", e);
+                future.complete(AuthResult.error("Network error: " + e.getMessage()));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Register new user
+     */
+    public CompletableFuture<AuthResult> register(String username, String email, String password) {
+        CompletableFuture<AuthResult> future = new CompletableFuture<>();
+
+        executorService.execute(() -> {
+            try {
+                RegisterRequest request = new RegisterRequest(username, email, password);
+                RequestBody body = RequestBody.create(
+                        gson.toJson(request),
+                        MediaType.get("application/json")
+                );
+
+                Request httpRequest = new Request.Builder()
+                        .url(BASE_URL + "register_user.php")
+                        .post(body)
+                        .header("Content-Type", "application/json")
+                        .build();
+
+                Response response = httpClient.newCall(httpRequest).execute();
+                String responseBody = response.body().string();
+
+                if (response.isSuccessful()) {
+                    RegisterResponse registerResponse = gson.fromJson(responseBody, RegisterResponse.class);
+                    if (registerResponse.success) {
+                        future.complete(AuthResult.success("Registration successful. Please login."));
+                    } else {
+                        future.complete(AuthResult.error(registerResponse.message));
+                    }
+                } else {
+                    future.complete(AuthResult.error("Registration failed"));
+                }
+
+            } catch (Exception e) {
+                Log.e(TAG, "Registration error", e);
+                future.complete(AuthResult.error("Network error: " + e.getMessage()));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Request password reset
+     */
+    public CompletableFuture<AuthResult> requestPasswordReset(String email) {
+        CompletableFuture<AuthResult> future = new CompletableFuture<>();
+
+        executorService.execute(() -> {
+            try {
+                PasswordResetRequest request = new PasswordResetRequest(email);
+                RequestBody body = RequestBody.create(
+                        gson.toJson(request),
+                        MediaType.get("application/json")
+                );
+
+                Request httpRequest = new Request.Builder()
+                        .url(BASE_URL + "forgot_password.php")
+                        .post(body)
+                        .header("Content-Type", "application/json")
+                        .build();
+
+                Response response = httpClient.newCall(httpRequest).execute();
+                String responseBody = response.body().string();
+
+                BasicResponse basicResponse = gson.fromJson(responseBody, BasicResponse.class);
+                if ("ok".equals(basicResponse.status)) {
+                    future.complete(AuthResult.success("Password reset email sent"));
+                } else {
+                    future.complete(AuthResult.error(basicResponse.message));
+                }
+
+            } catch (Exception e) {
+                Log.e(TAG, "Password reset error", e);
+                future.complete(AuthResult.error("Network error: " + e.getMessage()));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Logout current user
+     */
+    public void logout() {
+        clearUserData();
+    }
+
+    /**
+     * Check if user is logged in
+     */
+    public boolean isLoggedIn() {
+        return currentUser != null && currentUser.apiKey != null && !currentUser.apiKey.isEmpty();
+    }
+
+    /**
+     * Get current user
+     */
+    public User getCurrentUser() {
+        return currentUser;
+    }
+
+    /**
+     * Get API key for authenticated requests
+     */
+    public String getApiKey() {
+        return currentUser != null ? currentUser.apiKey : null;
+    }
+
+    /**
+     * Get user ID for authenticated requests
+     */
+    public int getUserId() {
+        return currentUser != null ? currentUser.id : 0;
+    }
+
+    /**
+     * Add authentication headers to request
+     */
+    public Request.Builder addAuthHeaders(Request.Builder builder) {
+        if (currentUser != null && currentUser.apiKey != null) {
+            builder.addHeader("X-API-KEY", currentUser.apiKey);
+            builder.addHeader("X-USER-ID", String.valueOf(currentUser.id));
+        }
+        return builder;
+    }
+
+    /**
+     * Validate current session by making a test API call
+     */
+    public CompletableFuture<Boolean> validateSession() {
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+
+        if (!isLoggedIn()) {
+            future.complete(false);
+            return future;
+        }
+
+        executorService.execute(() -> {
+            try {
+                Request.Builder builder = new Request.Builder()
+                        .url(BASE_URL + "api/user_profile.php")
+                        .get();
+
+                Request request = addAuthHeaders(builder).build();
+                Response response = httpClient.newCall(request).execute();
+
+                boolean valid = response.isSuccessful();
+                if (!valid) {
+                    // Session invalid, clear user data
+                    clearUserData();
+                }
+
+                future.complete(valid);
+
+            } catch (Exception e) {
+                Log.e(TAG, "Session validation error", e);
+                future.complete(false);
+            }
+        });
+
+        return future;
+    }
+
+    // Data classes for API communication
+    public static class User {
+        public int id;
+        public String username;
+        public String email;
+        public String apiKey;
+        public String role;
+
+        public boolean isAdmin() {
+            return "admin".equals(role);
+        }
+    }
+
+    public static class AuthResult {
+        public final boolean success;
+        public final String message;
+        public final User user;
+
+        private AuthResult(boolean success, String message, User user) {
+            this.success = success;
+            this.message = message;
+            this.user = user;
+        }
+
+        public static AuthResult success(String message) {
+            return new AuthResult(true, message, null);
+        }
+
+        public static AuthResult success(String message, User user) {
+            return new AuthResult(true, message, user);
+        }
+
+        public static AuthResult error(String message) {
+            return new AuthResult(false, message, null);
+        }
+    }
+
+    // Request/Response classes
+    private static class LoginRequest {
+        final String username;
+        final String password;
+
+        LoginRequest(String username, String password) {
+            this.username = username;
+            this.password = password;
+        }
+    }
+
+    private static class LoginResponse {
+        String status;
+        String message;
+        @SerializedName("user_id")
+        int userId;
+        @SerializedName("api_key")
+        String apiKey;
+        String email;
+        String role;
+    }
+
+    private static class RegisterRequest {
+        final String username;
+        final String email;
+        final String password;
+        final String role = "user"; // Default role
+
+        RegisterRequest(String username, String email, String password) {
+            this.username = username;
+            this.email = email;
+            this.password = password;
+        }
+    }
+
+    private static class RegisterResponse {
+        boolean success;
+        String message;
+    }
+
+    private static class PasswordResetRequest {
+        final String email;
+
+        PasswordResetRequest(String email) {
+            this.email = email;
+        }
+    }
+
+    private static class BasicResponse {
+        String status;
+        String message;
+    }
+
+    private static class ErrorResponse {
+        String status;
+        String message;
+    }
+
+    /**
+     * Interface for authentication state changes
+     */
+    public interface AuthStateListener {
+        void onAuthStateChanged(boolean isLoggedIn, User user);
+    }
+
+    // Auth state listeners
+    private java.util.List<AuthStateListener> authStateListeners = new java.util.ArrayList<>();
+
+    public void addAuthStateListener(AuthStateListener listener) {
+        authStateListeners.add(listener);
+    }
+
+    public void removeAuthStateListener(AuthStateListener listener) {
+        authStateListeners.remove(listener);
+    }
+
+    private void notifyAuthStateChanged(boolean isLoggedIn, User user) {
+        Handler mainHandler = new Handler(Looper.getMainLooper());
+        mainHandler.post(() -> {
+            for (AuthStateListener listener : authStateListeners) {
+                listener.onAuthStateChanged(isLoggedIn, user);
+            }
+        });
+    }
+}

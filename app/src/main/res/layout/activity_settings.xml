@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Temperature Thresholds"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="These thresholds determine when temperature alerts are triggered and how temperatures are displayed on device cards."
+        android:textSize="14sp"
+        android:textColor="@android:color/darker_gray"
+        android:layout_marginBottom="24dp" />
+
+    <EditText
+        android:id="@+id/highThresholdEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="High Temperature Threshold (°F)"
+        android:inputType="numberDecimal"
+        android:background="@drawable/edit_text_background"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp" />
+
+    <EditText
+        android:id="@+id/lowThresholdEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Low Temperature Threshold (°F)"
+        android:inputType="numberDecimal"
+        android:background="@drawable/edit_text_background"
+        android:padding="12dp"
+        android:layout_marginBottom="32dp" />
+
+    <Button
+        android:id="@+id/saveButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Save Settings"
+        android:textSize="16sp"
+        android:background="@drawable/button_primary"
+        android:textColor="@android:color/white"
+        android:padding="14dp" />
+
+</LinearLayout>
